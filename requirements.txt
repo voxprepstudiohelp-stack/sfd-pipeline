@@ -1,5 +1,5 @@
 finance-datareader
-pykrx
+yfinance
 pandas
 numpy
 google-auth
