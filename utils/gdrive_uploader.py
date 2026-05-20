@@ -1,49 +1,39 @@
-# utils/gdrive_uploader.py
+# utils/gdrive_uploader.py — OAuth2 Refresh Token 버전
 # GitHub: sfd-pipeline/utils/gdrive_uploader.py
 
 import os, json
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
-from google.oauth2.service_account import Credentials
-
-SCOPES = ["https://www.googleapis.com/auth/drive"]
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
 
 def get_drive_service():
-    creds_json = os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]
-    creds_info = json.loads(creds_json)
-    creds = Credentials.from_service_account_info(creds_info, scopes=SCOPES)
+    creds = Credentials(
+        token=None,
+        refresh_token=os.environ["GDRIVE_REFRESH_TOKEN"],
+        client_id=os.environ["GDRIVE_CLIENT_ID"],
+        client_secret=os.environ["GDRIVE_CLIENT_SECRET"],
+        token_uri="https://oauth2.googleapis.com/token",
+        scopes=["https://www.googleapis.com/auth/drive"]
+    )
+    creds.refresh(Request())
     return build("drive", "v3", credentials=creds)
 
 def upload_or_replace(service, local_path: str, folder_id: str):
     filename = os.path.basename(local_path)
-
-    # supportsAllDrives=True, includeItemsFromAllDrives=True 추가
     q = f"name='{filename}' and '{folder_id}' in parents and trashed=false"
-    res = service.files().list(
-        q=q,
-        fields="files(id,name)",
-        supportsAllDrives=True,
-        includeItemsFromAllDrives=True
-    ).execute()
+    res = service.files().list(q=q, fields="files(id,name)").execute()
     existing = res.get("files", [])
-
     media = MediaFileUpload(local_path, mimetype="text/csv", resumable=False)
-
     if existing:
-        file_id = existing[0]["id"]
         service.files().update(
-            fileId=file_id,
-            media_body=media,
-            supportsAllDrives=True          # 추가
+            fileId=existing[0]["id"],
+            media_body=media
         ).execute()
         print(f"  ✅ 덮어쓰기: {filename}")
     else:
         meta = {"name": filename, "parents": [folder_id]}
-        service.files().create(
-            body=meta,
-            media_body=media,
-            supportsAllDrives=True          # 추가
-        ).execute()
+        service.files().create(body=meta, media_body=media).execute()
         print(f"  ✅ 신규업로드: {filename}")
 
 def upload_batch(file_folder_pairs: list):
