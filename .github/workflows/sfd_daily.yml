@@ -1,66 +1,62 @@
 name: SFD Daily Pipeline
+# 파일위치(GitHub): sfd-pipeline/.github/workflows/sfd_daily.yml
 
 on:
   schedule:
+    # KST 06:40 = UTC 21:40 (전날 기준, 월~금)
     - cron: '40 21 * * 0-4'
-  workflow_dispatch:
+  workflow_dispatch:  # 수동 실행 버튼 (테스트용)
 
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 60
 
     env:
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
       GDRIVE_LATEST_FOLDER_ID:     ${{ secrets.GDRIVE_LATEST_FOLDER_ID }}
       GDRIVE_HISTORY_FOLDER_ID:    ${{ secrets.GDRIVE_HISTORY_FOLDER_ID }}
       GDRIVE_INPUT_FOLDER_ID:      ${{ secrets.GDRIVE_INPUT_FOLDER_ID }}
-      GDRIVE_CLIENT_ID:            ${{ secrets.GDRIVE_CLIENT_ID }}
-      GDRIVE_CLIENT_SECRET:        ${{ secrets.GDRIVE_CLIENT_SECRET }}
-      GDRIVE_REFRESH_TOKEN:        ${{ secrets.GDRIVE_REFRESH_TOKEN }}
 
     steps:
-      - name: Checkout
+      - name: 📥 코드 체크아웃
         uses: actions/checkout@v4
 
-      - name: Python 3.11
+      - name: 🐍 Python 3.11 세팅
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: Install dependencies
+      - name: 📦 의존성 설치
         run: pip install -r requirements.txt
 
-      - name: Make dirs
+      - name: 📁 임시 디렉토리 생성
         run: mkdir -p /tmp/sfd/outputs/latest /tmp/sfd/outputs/history /tmp/sfd/inputs
 
-      - name: Layer1 prev_close_fetch
+      - name: 🚀 Layer 1 — prev_close_fetch
         run: python tools/sfd_prev_close_fetch.py
 
-      - name: Layer2 signal_aggregator
+      - name: 📊 Layer 2 — signal_aggregator
         run: python tools/sfd_signal_aggregator.py
 
-      - name: Upload latest to Drive
-        run: |
-          python - <<'EOF'
-          import glob
-          from utils.gdrive_uploader import upload_batch
-          from config import LATEST_DIR, GDRIVE_LATEST_FOLDER_ID
-          upload_batch([
-              (f'{LATEST_DIR}/sfd_prev_close_latest.csv',   GDRIVE_LATEST_FOLDER_ID),
-              (f'{LATEST_DIR}/sfd_master_signal_latest.csv', GDRIVE_LATEST_FOLDER_ID),
-              (f'{LATEST_DIR}/sfd_prev_close_fetch.log',     GDRIVE_LATEST_FOLDER_ID),
-              (f'{LATEST_DIR}/sfd_signal_aggregator.log',    GDRIVE_LATEST_FOLDER_ID),
-          ])
-          EOF
+      - name: ☁️ Google Drive 업로드 (latest)
+        run: python -c "
+from utils.gdrive_uploader import upload_batch
+from config import LATEST_DIR, GDRIVE_LATEST_FOLDER_ID
+upload_batch([
+    (f'{LATEST_DIR}/sfd_prev_close_latest.csv',   GDRIVE_LATEST_FOLDER_ID),
+    (f'{LATEST_DIR}/sfd_master_signal_latest.csv', GDRIVE_LATEST_FOLDER_ID),
+    (f'{LATEST_DIR}/sfd_prev_close_fetch.log',     GDRIVE_LATEST_FOLDER_ID),
+    (f'{LATEST_DIR}/sfd_signal_aggregator.log',    GDRIVE_LATEST_FOLDER_ID),
+])
+"
 
-      - name: Upload history to Drive
-        run: |
-          python - <<'EOF'
-          import glob
-          from utils.gdrive_uploader import upload_batch
-          from config import HISTORY_DIR, GDRIVE_HISTORY_FOLDER_ID
-          files = glob.glob(f'{HISTORY_DIR}/*.csv')
-          upload_batch([(f, GDRIVE_HISTORY_FOLDER_ID) for f in files])
-          EOF
+      - name: 📁 Google Drive 업로드 (history)
+        run: python -c "
+import glob
+from utils.gdrive_uploader import upload_batch
+from config import HISTORY_DIR, GDRIVE_HISTORY_FOLDER_ID
+files = glob.glob(f'{HISTORY_DIR}/*.csv')
+upload_batch([(f, GDRIVE_HISTORY_FOLDER_ID) for f in files])
+"
