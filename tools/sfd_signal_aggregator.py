@@ -1,190 +1,171 @@
-# sfd_signal_aggregator.py v2.0 (yfinance 배치 — 목표 5분)
-# GitHub: sfd-pipeline/tools/sfd_signal_aggregator.py
+# ============================================================
+# 파일명: sfd_signal_aggregator.py
+# 버전: v2.1
+# 작성: Claude (Anthropic) — 2026-05-21
+# GitHub 경로: voxprepstudiohelp-stack/sfd-pipeline/tools/sfd_signal_aggregator.py
+#
+# [v2.1 변경사항 — v1.3 대비]
+# - NEWS_CSV: sfd_news_signal_latest.csv → sfd_news_score_latest.csv 로 변경
+# - build_news_score_map() 복잡한 파싱 로직 제거
+#   → load_news_score_map() 으로 교체: ticker/news_score 컬럼 직접 읽기
+# - score_news() 함수: news_score_map dict 직접 조회로 단순화
+# - 나머지 로직 v1.3과 동일 유지
+# ============================================================
 
-import os, sys, time, logging, glob
+import os
+import sys
+import time
+import logging
 from datetime import datetime, timedelta
 
 import pandas as pd
 import numpy as np
-import yfinance as yf
 import FinanceDataReader as fdr
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import LATEST_DIR, HISTORY_DIR, INPUT_DIR
+from config import BASE, LATEST_DIR, HISTORY_DIR, INPUT_DIR
 
-LATEST_CSV  = os.path.join(LATEST_DIR, "sfd_master_signal_latest.csv")
-INPUT_CSV   = os.path.join(INPUT_DIR,  "sfd_master_signal_input.csv")
-LOG_PATH    = os.path.join(LATEST_DIR, "sfd_signal_aggregator.log")
-PREV_CSV    = os.path.join(LATEST_DIR, "sfd_prev_close_latest.csv")
-INVESTOR_CSV= os.path.join(LATEST_DIR, "sfd_investor_flow_latest.csv")
-NEWS_CSV    = os.path.join(LATEST_DIR, "sfd_news_signal_latest.csv")
+LATEST_CSV     = os.path.join(LATEST_DIR, "sfd_master_signal_latest.csv")
+INPUT_CSV      = os.path.join(INPUT_DIR,  "sfd_master_signal_input.csv")
+LOG_PATH       = os.path.join(LATEST_DIR, "sfd_signal_aggregator.log")
+PREV_CLOSE_CSV = os.path.join(LATEST_DIR, "sfd_prev_close_latest.csv")
+INVESTOR_CSV   = os.path.join(LATEST_DIR, "sfd_investor_flow_latest.csv")
+NEWS_SCORE_CSV = os.path.join(LATEST_DIR, "sfd_news_score_latest.csv")  # ★ v2.1 변경
 
 os.makedirs(LATEST_DIR,  exist_ok=True)
 os.makedirs(HISTORY_DIR, exist_ok=True)
 os.makedirs(INPUT_DIR,   exist_ok=True)
 
-logging.basicConfig(filename=LOG_PATH, level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s", encoding="utf-8")
+logging.basicConfig(
+    filename=LOG_PATH, level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s", encoding="utf-8",
+)
 
-START_TIME  = time.time()
-now         = datetime.now()
-fetch_time  = now.strftime("%Y-%m-%d %H:%M:%S")
-
-# ── 임계값
-THRESHOLD_RESERVE = 30
-THRESHOLD_WATCH   = 20
-MODE              = "TEMP"
+START_TIME = time.time()
+now        = datetime.now()
+fetch_time = now.strftime("%Y-%m-%d %H:%M:%S")
 
 RSI_PERIOD    = 14
-MA_SHORT, MA_MID, MA_LONG = 5, 20, 60
+MA_SHORT      = 5
+MA_MID        = 20
+MA_LONG       = 60
 VOL_PERIOD    = 20
-BATCH_SIZE    = 400   # yfinance 1회 배치 크기
 TOP_VALUE_PCT = 0.20
 
-print(f"\n========== SFD Signal Aggregator v2.0 (yfinance 배치) ==========")
-print(f"모드: {MODE} | RESERVE≥{THRESHOLD_RESERVE} / WATCH≥{THRESHOLD_WATCH}")
-print(f"실행 시각: {fetch_time}")
+THRESHOLD_RESERVE = 30
+THRESHOLD_WATCH   = 20
+MODE = "TEMP"
+# 수급 복원 후: THRESHOLD_RESERVE=70, THRESHOLD_WATCH=50, MODE="ORIGINAL"
 
-# ── 1. prev_close 로드
-if not os.path.exists(PREV_CSV):
-    print(f"❌ prev_close 없음: {PREV_CSV}")
-    sys.exit(1)
 
-prev_df = pd.read_csv(PREV_CSV, dtype={"ticker": str})
-prev_df["ticker"] = prev_df["ticker"].astype(str).str.zfill(6)
-print(f"총 종목: {len(prev_df)}")
-
-# ── 2. 거래대금 상위 20% 임계값
-value_threshold = 0
-if "prev_value" in prev_df.columns:
-    vs = pd.to_numeric(prev_df["prev_value"], errors="coerce").dropna()
-    value_threshold = vs.quantile(1 - TOP_VALUE_PCT) if len(vs) > 0 else 0
-
-# ── 3. 뉴스 점수 맵
-news_score_map = {}
-if os.path.exists(NEWS_CSV):
-    news_df = pd.read_csv(NEWS_CSV)
-    for _, row in news_df.iterrows():
-        raw = row.get("detected_stocks", "")
-        imp = row.get("importance_score", 0)
-        if pd.isna(raw) or str(raw).strip() == "":
+def find_recent_trade_date():
+    for i in range(7):
+        d = now - timedelta(days=i)
+        if d.weekday() >= 5:
             continue
-        try: imp = float(imp)
-        except: imp = 0
-        pts = round(imp * 0.3, 1)
-        for t in str(raw).split(";"):
-            t = t.strip().zfill(6)
-            news_score_map[t] = min(30, news_score_map.get(t, 0) + pts)
+        d_str = d.strftime("%Y-%m-%d")
+        try:
+            df = fdr.DataReader("005930", d_str, d_str)
+            if df is not None and len(df) > 0:
+                return d.strftime("%Y%m%d")
+        except:
+            pass
+    return now.strftime("%Y%m%d")
 
-# ── 4. 수급 점수 맵
-investor_df = pd.read_csv(INVESTOR_CSV, dtype={"ticker": str}) if os.path.exists(INVESTOR_CSV) else None
 
-# ── 5. yfinance 배치 기술지표 수집
 def calc_rsi(series, period=14):
-    delta = series.diff()
-    gain  = delta.clip(lower=0).ewm(com=period-1, min_periods=period).mean()
-    loss  = (-delta.clip(upper=0)).ewm(com=period-1, min_periods=period).mean()
-    rs    = gain / loss.replace(0, np.nan)
+    delta    = series.diff()
+    gain     = delta.clip(lower=0)
+    loss     = -delta.clip(upper=0)
+    avg_gain = gain.ewm(com=period - 1, min_periods=period).mean()
+    avg_loss = loss.ewm(com=period - 1, min_periods=period).mean()
+    rs       = avg_gain / avg_loss.replace(0, np.nan)
     return 100 - (100 / (1 + rs))
 
-def build_tech_map(tickers_raw, market_suffix):
-    tech_map = {}
-    yf_tickers = [f"{t}{market_suffix}" for t in tickers_raw]
 
-    end_dt   = now.strftime("%Y-%m-%d")
-    start_dt = (now - timedelta(days=150)).strftime("%Y-%m-%d")
+def get_technical_data(ticker, end_date):
+    try:
+        end   = datetime.strptime(end_date, "%Y%m%d")
+        start = (end - timedelta(days=120)).strftime("%Y-%m-%d")
+        df    = fdr.DataReader(ticker, start, end.strftime("%Y-%m-%d"))
+        if df is None or len(df) < MA_LONG:
+            return None
+        df = df.sort_index()
+        df["rsi"]           = calc_rsi(df["Close"], RSI_PERIOD)
+        df[f"ma{MA_SHORT}"] = df["Close"].rolling(MA_SHORT).mean()
+        df[f"ma{MA_MID}"]   = df["Close"].rolling(MA_MID).mean()
+        df[f"ma{MA_LONG}"]  = df["Close"].rolling(MA_LONG).mean()
+        df["vol_avg"]       = df["Volume"].rolling(VOL_PERIOD).mean()
+        last = df.iloc[-1]
+        return {
+            "rsi":      round(last["rsi"], 2) if not pd.isna(last["rsi"]) else None,
+            "ma_short": last[f"ma{MA_SHORT}"],
+            "ma_mid":   last[f"ma{MA_MID}"],
+            "ma_long":  last[f"ma{MA_LONG}"],
+            "volume":   last["Volume"],
+            "vol_avg":  last["vol_avg"],
+        }
+    except:
+        return None
 
-    for i in range(0, len(yf_tickers), BATCH_SIZE):
-        batch_yf  = yf_tickers[i:i+BATCH_SIZE]
-        batch_raw = tickers_raw[i:i+BATCH_SIZE]
-        print(f"  기술지표 배치 {i//BATCH_SIZE+1}/{(len(yf_tickers)-1)//BATCH_SIZE+1} ({market_suffix}): {len(batch_yf)}종목")
 
-        try:
-            data = yf.download(
-                batch_yf,
-                start=start_dt,
-                end=end_dt,
-                auto_adjust=True,
-                progress=False,
-                threads=True
+def load_news_score_map() -> dict[str, float]:
+    """
+    ★ v2.1 신규: sfd_news_score_latest.csv → {ticker: news_score} dict
+    (sfd_news_fetcher v2.0 출력 직접 소비)
+    """
+    if not os.path.exists(NEWS_SCORE_CSV):
+        logging.warning(f"NEWS_SCORE_CSV 없음: {NEWS_SCORE_CSV}")
+        return {}
+    try:
+        df = pd.read_csv(NEWS_SCORE_CSV, encoding="utf-8-sig", dtype={"ticker": str})
+        if "ticker" not in df.columns or "news_score" not in df.columns:
+            logging.warning(f"NEWS_SCORE_CSV 컬럼 오류: {df.columns.tolist()}")
+            return {}
+        score_map = dict(
+            zip(
+                df["ticker"].str.strip().str.zfill(6),
+                pd.to_numeric(df["news_score"], errors="coerce").fillna(0),
             )
-            if data.empty:
-                continue
+        )
+        logging.info(f"뉴스점수 로드: {len(score_map)}종목")
+        return score_map
+    except Exception as e:
+        logging.error(f"뉴스점수 로드 오류: {e}")
+        return {}
 
-            # 단일 종목이면 컬럼 구조 다름 → 표준화
-            if isinstance(data.columns, pd.MultiIndex):
-                close_df  = data["Close"]
-                vol_df    = data["Volume"]
-            else:
-                close_df  = data[["Close"]].rename(columns={"Close": batch_yf[0]})
-                vol_df    = data[["Volume"]].rename(columns={"Volume": batch_yf[0]})
 
-            for yf_t, raw_t in zip(batch_yf, batch_raw):
-                try:
-                    if yf_t not in close_df.columns:
-                        continue
-                    close = close_df[yf_t].dropna()
-                    vol   = vol_df[yf_t].dropna()
-                    if len(close) < MA_LONG:
-                        continue
-
-                    rsi      = calc_rsi(close, RSI_PERIOD).iloc[-1]
-                    ma_s     = close.rolling(MA_SHORT).mean().iloc[-1]
-                    ma_m     = close.rolling(MA_MID).mean().iloc[-1]
-                    ma_l     = close.rolling(MA_LONG).mean().iloc[-1]
-                    vol_last = vol.iloc[-1]
-                    vol_avg  = vol.rolling(VOL_PERIOD).mean().iloc[-1]
-
-                    tech_map[raw_t] = {
-                        "rsi": round(rsi, 2) if not np.isnan(rsi) else None,
-                        "ma_short": ma_s, "ma_mid": ma_m, "ma_long": ma_l,
-                        "volume": vol_last, "vol_avg": vol_avg
-                    }
-                except:
-                    pass
-            time.sleep(0.5)
-
-        except Exception as e:
-            print(f"  배치 오류: {e}")
-
-    return tech_map
-
-# KOSPI / KOSDAQ 분리 처리
-kospi_df  = prev_df[prev_df["market"] == "KOSPI"]  if "market" in prev_df.columns else prev_df
-kosdaq_df = prev_df[prev_df["market"] == "KOSDAQ"] if "market" in prev_df.columns else pd.DataFrame()
-
-print("\nKOSPI 기술지표 수집...")
-tech_map = build_tech_map(kospi_df["ticker"].tolist(), ".KS")
-
-print("\nKOSDAQ 기술지표 수집...")
-tech_map.update(build_tech_map(kosdaq_df["ticker"].tolist(), ".KQ"))
-
-print(f"\n기술지표 수집 완료: {len(tech_map)}종목")
-
-# ── 6. 점수 함수
 def score_rsi(rsi):
     if rsi is None: return 0
-    if rsi < 30: return 15
-    if rsi < 50: return 10
-    if rsi < 70: return 5
+    if rsi < 30:    return 15
+    if rsi < 50:    return 10
+    if rsi < 70:    return 5
     return 0
 
-def score_ma(ms, mm, ml):
-    if None in [ms, mm, ml]: return 0
-    if ms > mm > ml: return 15
-    if ms > mm:      return 8
-    if ms > ml:      return 4
+
+def score_ma(ma_short, ma_mid, ma_long):
+    if None in [ma_short, ma_mid, ma_long]: return 0
+    if ma_short > ma_mid > ma_long: return 15
+    if ma_short > ma_mid:           return 8
+    if ma_short > ma_long:          return 4
     return 0
 
-def score_volume(v, va):
-    if not va or va == 0: return 0
-    r = v / va
+
+def score_volume(volume, vol_avg):
+    if not vol_avg or vol_avg == 0: return 0
+    r = volume / vol_avg
     if r >= 2.0: return 10
     if r >= 1.5: return 7
     if r >= 1.0: return 4
     return 0
 
-def score_investor(ticker):
+
+def score_news(ticker: str, news_score_map: dict) -> float:
+    """★ v2.1: dict 직접 조회 (파싱 로직 제거)"""
+    return min(float(news_score_map.get(str(ticker).zfill(6), 0)), 30)
+
+
+def score_investor(ticker, investor_df):
     if investor_df is None or investor_df.empty: return 0
     row = investor_df[investor_df["ticker"] == ticker]
     if row.empty: return 0
@@ -192,66 +173,97 @@ def score_investor(ticker):
         f = float(row.iloc[0].get("foreign_net_buy", 0))
         i = float(row.iloc[0].get("institution_net_buy", 0))
         return (10 if f > 0 else 0) + (10 if i > 0 else 0)
-    except: return 0
+    except:
+        return 0
 
-# ── 7. 전종목 스코어링
-trade_date = (now - timedelta(days=1)).strftime("%Y%m%d")
-results    = []
 
-for _, row in prev_df.iterrows():
-    ticker = row["ticker"]
-    name   = row.get("name", "")
-    tech   = tech_map.get(ticker, {})
+def score_theme(ticker, prev_df):
+    if prev_df is None or "prev_value" not in prev_df.columns: return 0
+    try:
+        threshold = prev_df["prev_value"].quantile(1 - TOP_VALUE_PCT)
+        row = prev_df[prev_df["ticker"] == ticker]
+        if row.empty: return 0
+        return 10 if float(row.iloc[0]["prev_value"]) >= threshold else 0
+    except:
+        return 0
 
-    rsi      = tech.get("rsi")
-    ma_s     = tech.get("ma_short")
-    ma_m     = tech.get("ma_mid")
-    ma_l     = tech.get("ma_long")
-    volume   = tech.get("volume")
-    vol_avg  = tech.get("vol_avg")
 
-    tech_score     = score_rsi(rsi) + score_ma(ma_s, ma_m, ma_l) + score_volume(volume, vol_avg)
-    news_score     = round(news_score_map.get(ticker, 0), 1)
-    investor_score = score_investor(ticker)
+def classify_signal(total_score):
+    if total_score >= THRESHOLD_RESERVE: return "RESERVE_BUY"
+    if total_score >= THRESHOLD_WATCH:   return "WATCH_ONLY"
+    return "HOLD"
 
-    prev_val   = pd.to_numeric(row.get("prev_value", 0), errors="coerce") or 0
-    theme_score= 10 if (value_threshold > 0 and prev_val >= value_threshold) else 0
 
-    total = tech_score + news_score + investor_score + theme_score
+def main():
+    logging.info("=== sfd_signal_aggregator v2.1 시작 ===")
 
-    signal = "RESERVE_BUY" if total >= THRESHOLD_RESERVE else \
-             "WATCH_ONLY"  if total >= THRESHOLD_WATCH   else "HOLD"
+    trade_date = find_recent_trade_date()
+    logging.info(f"기준 거래일: {trade_date}")
 
-    ma_label = "정배열" if (ma_s and ma_m and ma_l and ma_s > ma_m > ma_l) else \
-               "역배열" if (ma_s and ma_m and ma_l and ma_s < ma_m < ma_l) else "혼합"
+    if not os.path.exists(INPUT_CSV):
+        logging.error(f"INPUT_CSV 없음: {INPUT_CSV}")
+        return
+    if not os.path.exists(PREV_CLOSE_CSV):
+        logging.error(f"PREV_CLOSE_CSV 없음: {PREV_CLOSE_CSV}")
+        return
 
-    results.append({
-        "ticker": ticker, "name": name,
-        "signal": signal, "total_score": total,
-        "tech_score": tech_score, "news_score": news_score,
-        "investor_score": investor_score, "theme_score": theme_score,
-        "rsi": rsi, "ma_alignment": ma_label,
-        "vol_ratio": round(volume/vol_avg, 2) if (volume and vol_avg and vol_avg > 0) else None,
-        "trade_date": trade_date, "generated_at": fetch_time, "mode": MODE
-    })
+    input_df    = pd.read_csv(INPUT_CSV,      encoding="utf-8-sig", dtype={"ticker": str})
+    prev_df     = pd.read_csv(PREV_CLOSE_CSV, encoding="utf-8-sig", dtype={"ticker": str})
+    investor_df = pd.read_csv(INVESTOR_CSV,   encoding="utf-8-sig", dtype={"ticker": str}) \
+                  if os.path.exists(INVESTOR_CSV) else None
 
-result_df = pd.DataFrame(results).sort_values("total_score", ascending=False).reset_index(drop=True)
+    news_score_map = load_news_score_map()  # ★ v2.1
 
-# ── 8. 저장
-result_df.to_csv(LATEST_CSV, index=False, encoding="utf-8-sig")
-print(f"\n✅ latest : {LATEST_CSV}")
+    if "prev_value" in prev_df.columns:
+        prev_df["prev_value"] = pd.to_numeric(prev_df["prev_value"], errors="coerce").fillna(0)
 
-history_file = os.path.join(HISTORY_DIR, f"sfd_master_signal_{trade_date}.csv")
-result_df.to_csv(history_file, index=False, encoding="utf-8-sig")
-print(f"✅ history: {history_file}")
+    tickers = input_df["ticker"].dropna().astype(str).str.zfill(6).unique().tolist()
+    logging.info(f"처리 대상 종목: {len(tickers)}개")
 
-input_df = result_df[result_df["signal"].isin(["RESERVE_BUY","WATCH_ONLY"])][
-    ["ticker","name","signal","total_score"]].copy()
-input_df.to_csv(INPUT_CSV, index=False, encoding="utf-8-sig")
-print(f"✅ input  : {INPUT_CSV}")
+    results = []
+    for ticker in tickers:
+        tech = get_technical_data(ticker, trade_date)
+        if tech is None:
+            continue
 
-reserve = len(result_df[result_df["signal"]=="RESERVE_BUY"])
-watch   = len(result_df[result_df["signal"]=="WATCH_ONLY"])
-elapsed = round(time.time() - START_TIME)
-print(f"\nRESERVE: {reserve} | WATCH: {watch} | 소요: {elapsed}초")
-logging.info(f"완료 | RESERVE={reserve} | WATCH={watch} | 소요={elapsed}s | MODE={MODE}")
+        t_score  = score_rsi(tech["rsi"]) + score_ma(tech["ma_short"], tech["ma_mid"], tech["ma_long"]) + score_volume(tech["volume"], tech["vol_avg"])
+        n_score  = score_news(ticker, news_score_map)
+        i_score  = score_investor(ticker, investor_df)
+        th_score = score_theme(ticker, prev_df)
+        total    = t_score + n_score + i_score + th_score
+        signal   = classify_signal(total)
+
+        name_row = input_df[input_df["ticker"] == ticker]
+        name     = name_row.iloc[0].get("name", "") if not name_row.empty else ""
+
+        results.append({
+            "fetch_date": trade_date, "fetch_time": fetch_time,
+            "ticker": ticker, "name": name, "signal": signal,
+            "total_score": total, "tech_score": t_score,
+            "news_score": round(n_score, 2), "investor_score": i_score,
+            "theme_score": th_score, "rsi": tech["rsi"],
+            "ma_align": "정배열" if tech["ma_short"] and tech["ma_mid"] and tech["ma_long"]
+                        and tech["ma_short"] > tech["ma_mid"] > tech["ma_long"] else "비정배열",
+            "vol_ratio": round(tech["volume"] / tech["vol_avg"], 2)
+                         if tech["vol_avg"] and tech["vol_avg"] > 0 else 0,
+            "mode": MODE,
+        })
+
+    df_out = pd.DataFrame(results)
+    df_out = df_out.sort_values("total_score", ascending=False).reset_index(drop=True)
+    df_out.to_csv(LATEST_CSV, index=False, encoding="utf-8-sig")
+
+    history_path = os.path.join(HISTORY_DIR, f"sfd_master_signal_{trade_date}.csv")
+    df_out.to_csv(history_path, index=False, encoding="utf-8-sig")
+
+    elapsed = int(time.time() - START_TIME)
+    reserve = len(df_out[df_out["signal"] == "RESERVE_BUY"])
+    watch   = len(df_out[df_out["signal"] == "WATCH_ONLY"])
+
+    logging.info(f"완료 | RESERVE={reserve} | WATCH={watch} | 소요={elapsed}s | MODE={MODE}")
+    print(f"[OK] RESERVE={reserve} | WATCH={watch} | 소요={elapsed}s | MODE={MODE}")
+    print(f"     -> {LATEST_CSV}")
+
+
+if __name__ == "__main__":
+    main()
