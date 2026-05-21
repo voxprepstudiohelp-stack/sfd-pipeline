@@ -1,15 +1,12 @@
 name: SFD Daily Pipeline
-
 on:
   schedule:
     - cron: '40 21 * * 0-4'
   workflow_dispatch:
-
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
     timeout-minutes: 120
-
     env:
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
       GDRIVE_LATEST_FOLDER_ID:     ${{ secrets.GDRIVE_LATEST_FOLDER_ID }}
@@ -18,32 +15,31 @@ jobs:
       GDRIVE_CLIENT_ID:            ${{ secrets.GDRIVE_CLIENT_ID }}
       GDRIVE_CLIENT_SECRET:        ${{ secrets.GDRIVE_CLIENT_SECRET }}
       GDRIVE_REFRESH_TOKEN:        ${{ secrets.GDRIVE_REFRESH_TOKEN }}
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
-
       - name: Install dependencies
         run: pip install -r requirements.txt
-
       - name: Make dirs
         run: mkdir -p /tmp/sfd/outputs/latest /tmp/sfd/outputs/history /tmp/sfd/inputs
-
       - name: Layer1 prev_close_fetch
         run: python tools/sfd_prev_close_fetch.py
-
+      - name: Layer1.5 news_fetcher
+        env:
+          NAVER_CLIENT_ID:     ${{ secrets.NAVER_CLIENT_ID }}
+          NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+          NAVER_NEWS_DISPLAY:  "20"
+        run: python tools/sfd_news_fetcher.py
+        continue-on-error: true
       - name: Layer2 signal_aggregator
         run: python tools/sfd_signal_aggregator.py
-
       - name: Layer3 D+1 backtest
         run: python tools/sfd_backtest_d1.py
-
       - name: Upload latest to Drive
         run: |
           python - <<'EOF'
@@ -51,14 +47,16 @@ jobs:
           from utils.gdrive_uploader import upload_batch
           from config import LATEST_DIR, GDRIVE_LATEST_FOLDER_ID
           upload_batch([
-              (f'{LATEST_DIR}/sfd_prev_close_latest.csv',   GDRIVE_LATEST_FOLDER_ID),
+              (f'{LATEST_DIR}/sfd_prev_close_latest.csv',    GDRIVE_LATEST_FOLDER_ID),
+              (f'{LATEST_DIR}/sfd_news_signal_latest.csv',   GDRIVE_LATEST_FOLDER_ID),
+              (f'{LATEST_DIR}/sfd_news_score_latest.csv',    GDRIVE_LATEST_FOLDER_ID),
               (f'{LATEST_DIR}/sfd_master_signal_latest.csv', GDRIVE_LATEST_FOLDER_ID),
               (f'{LATEST_DIR}/sfd_prev_close_fetch.log',     GDRIVE_LATEST_FOLDER_ID),
               (f'{LATEST_DIR}/sfd_signal_aggregator.log',    GDRIVE_LATEST_FOLDER_ID),
               (f'{LATEST_DIR}/sfd_backtest_d1.log',          GDRIVE_LATEST_FOLDER_ID),
+              (f'{LATEST_DIR}/sfd_news_fetcher.log',         GDRIVE_LATEST_FOLDER_ID),
           ])
           EOF
-
       - name: Upload history to Drive
         run: |
           python - <<'EOF'
