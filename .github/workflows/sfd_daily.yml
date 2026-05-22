@@ -41,7 +41,9 @@ jobs:
       - name: Layer2.5 rerating_watch
         run: python tools/sfd_rerating_watch.py
         continue-on-error: true
-
+      - name: Layer2.6 fundamental_watch
+        run: python tools/sfd_fundamental_watch.py
+        continue-on-error: true
       - name: Layer3 D+1 backtest
         run: python tools/sfd_backtest_d1.py
       - name: Upload latest to Drive
@@ -51,15 +53,16 @@ jobs:
           from utils.gdrive_uploader import upload_batch
           from config import LATEST_DIR, GDRIVE_LATEST_FOLDER_ID
           upload_batch([
-              (f'{LATEST_DIR}/sfd_prev_close_latest.csv',    GDRIVE_LATEST_FOLDER_ID),
-              (f'{LATEST_DIR}/sfd_news_signal_latest.csv',   GDRIVE_LATEST_FOLDER_ID),
-              (f'{LATEST_DIR}/sfd_news_score_latest.csv',    GDRIVE_LATEST_FOLDER_ID),
-              (f'{LATEST_DIR}/sfd_master_signal_latest.csv', GDRIVE_LATEST_FOLDER_ID),
-              (f'{LATEST_DIR}/sfd_prev_close_fetch.log',     GDRIVE_LATEST_FOLDER_ID),
-              (f'{LATEST_DIR}/sfd_signal_aggregator.log',    GDRIVE_LATEST_FOLDER_ID),
-              (f'{LATEST_DIR}/sfd_backtest_d1.log',          GDRIVE_LATEST_FOLDER_ID),
-              (f'{LATEST_DIR}/sfd_rerating_watch_latest.csv', GDRIVE_LATEST_FOLDER_ID),
-              (f'{LATEST_DIR}/sfd_news_fetcher.log',         GDRIVE_LATEST_FOLDER_ID),
+              (f'{LATEST_DIR}/sfd_prev_close_latest.csv',      GDRIVE_LATEST_FOLDER_ID),
+              (f'{LATEST_DIR}/sfd_news_signal_latest.csv',     GDRIVE_LATEST_FOLDER_ID),
+              (f'{LATEST_DIR}/sfd_news_score_latest.csv',      GDRIVE_LATEST_FOLDER_ID),
+              (f'{LATEST_DIR}/sfd_master_signal_latest.csv',   GDRIVE_LATEST_FOLDER_ID),
+              (f'{LATEST_DIR}/sfd_prev_close_fetch.log',       GDRIVE_LATEST_FOLDER_ID),
+              (f'{LATEST_DIR}/sfd_signal_aggregator.log',      GDRIVE_LATEST_FOLDER_ID),
+              (f'{LATEST_DIR}/sfd_backtest_d1.log',            GDRIVE_LATEST_FOLDER_ID),
+              (f'{LATEST_DIR}/sfd_rerating_watch_latest.csv',  GDRIVE_LATEST_FOLDER_ID),
+              (f'{LATEST_DIR}/sfd_fundamental_latest.csv',     GDRIVE_LATEST_FOLDER_ID),
+              (f'{LATEST_DIR}/sfd_news_fetcher.log',           GDRIVE_LATEST_FOLDER_ID),
           ])
           EOF
       - name: Upload history to Drive
