@@ -1,0 +1,51 @@
+# ──────────────────────────────────────────────────────────────
+# sfd-event-calendar.yml
+# SFD Pipeline — Layer 1.6 Event Calendar Workflow
+# Schedule : 매주 일요일 22:00 KST (UTC 13:00)
+# Author   : Claude (Anthropic) — SFD Main Architect
+# Date     : 2026-05-22
+# ──────────────────────────────────────────────────────────────
+
+name: SFD Event Calendar Builder
+
+on:
+  schedule:
+    - cron: '0 13 * * 0'   # 매주 일요일 13:00 UTC = 22:00 KST
+  workflow_dispatch:         # 수동 트리거 (즉시 실행 테스트용)
+
+jobs:
+  build-event-calendar:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. 체크아웃
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Python 설정
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # ── 3. 의존성 설치
+      - name: Install dependencies
+        run: pip install pandas requests
+
+      # ── 4. 이벤트 캘린더 빌더 실행
+      - name: Run Event Calendar Builder
+        env:
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+        run: |
+          cd tools
+          python sfd_event_calendar_builder.py
+
+      # ── 5. 결과물 커밋 & 푸시
+      - name: Commit and push calendar output
+        run: |
+          git config user.name  "sfd-bot"
+          git config user.email "sfd-bot@noreply.github.com"
+          git add tools/outputs/latest/sfd_event_calendar_latest.csv
+          git diff --staged --quiet \
+            && echo "[SKIP] 변경사항 없음" \
+            || (git commit -m "chore: event calendar update $(date +'%Y-%m-%d')" && git push)
