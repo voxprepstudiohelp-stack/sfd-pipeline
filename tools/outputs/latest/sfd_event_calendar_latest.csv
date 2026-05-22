@@ -1,0 +1,21 @@
+﻿event_date,event_type,event_name,market,impact_dir,impact_score,d_minus_signal,source,notes
+2026-05-14,DERIVATIVE,KOSPI200 옵션만기,KR,NEUTRAL,-3,1,AUTO_KRX,수급 변동성 주의
+2026-06-11,DERIVATIVE,네 마녀의 날 (쿼드러플 위칭),KR,NEUTRAL,-5,2,AUTO_KRX,선물+옵션+ETF+주식선물 동시만기 / 변동성 최대
+2026-07-09,DERIVATIVE,KOSPI200 옵션만기,KR,NEUTRAL,-3,1,AUTO_KRX,수급 변동성 주의
+2026-08-13,DERIVATIVE,KOSPI200 옵션만기,KR,NEUTRAL,-3,1,AUTO_KRX,수급 변동성 주의
+2026-09-10,DERIVATIVE,네 마녀의 날 (쿼드러플 위칭),KR,NEUTRAL,-5,2,AUTO_KRX,선물+옵션+ETF+주식선물 동시만기 / 변동성 최대
+2026-10-08,DERIVATIVE,KOSPI200 옵션만기,KR,NEUTRAL,-3,1,AUTO_KRX,수급 변동성 주의
+2026-11-12,DERIVATIVE,KOSPI200 옵션만기,KR,NEUTRAL,-3,1,AUTO_KRX,수급 변동성 주의
+2026-12-10,DERIVATIVE,네 마녀의 날 (쿼드러플 위칭),KR,NEUTRAL,-5,2,AUTO_KRX,선물+옵션+ETF+주식선물 동시만기 / 변동성 최대
+2027-01-14,DERIVATIVE,KOSPI200 옵션만기,KR,NEUTRAL,-3,1,AUTO_KRX,수급 변동성 주의
+2027-02-11,DERIVATIVE,KOSPI200 옵션만기,KR,NEUTRAL,-3,1,AUTO_KRX,수급 변동성 주의
+2027-03-11,DERIVATIVE,네 마녀의 날 (쿼드러플 위칭),KR,NEUTRAL,-5,2,AUTO_KRX,선물+옵션+ETF+주식선물 동시만기 / 변동성 최대
+2027-04-08,DERIVATIVE,KOSPI200 옵션만기,KR,NEUTRAL,-3,1,AUTO_KRX,수급 변동성 주의
+2027-05-13,DERIVATIVE,KOSPI200 옵션만기,KR,NEUTRAL,-3,1,AUTO_KRX,수급 변동성 주의
+2027-06-10,DERIVATIVE,네 마녀의 날 (쿼드러플 위칭),KR,NEUTRAL,-5,2,AUTO_KRX,선물+옵션+ETF+주식선물 동시만기 / 변동성 최대
+2027-07-08,DERIVATIVE,KOSPI200 옵션만기,KR,NEUTRAL,-3,1,AUTO_KRX,수급 변동성 주의
+2027-08-12,DERIVATIVE,KOSPI200 옵션만기,KR,NEUTRAL,-3,1,AUTO_KRX,수급 변동성 주의
+2027-09-09,DERIVATIVE,네 마녀의 날 (쿼드러플 위칭),KR,NEUTRAL,-5,2,AUTO_KRX,선물+옵션+ETF+주식선물 동시만기 / 변동성 최대
+2027-10-14,DERIVATIVE,KOSPI200 옵션만기,KR,NEUTRAL,-3,1,AUTO_KRX,수급 변동성 주의
+2027-11-11,DERIVATIVE,KOSPI200 옵션만기,KR,NEUTRAL,-3,1,AUTO_KRX,수급 변동성 주의
+2027-12-09,DERIVATIVE,네 마녀의 날 (쿼드러플 위칭),KR,NEUTRAL,-5,2,AUTO_KRX,선물+옵션+ETF+주식선물 동시만기 / 변동성 최대
