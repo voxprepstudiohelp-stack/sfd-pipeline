@@ -1,19 +1,23 @@
 """
-sfd_fundamental_watch.py — Layer 2.6 v1.1_FIX
+sfd_fundamental_watch.py — Layer 2.6 v1.2
 수정사항:
-  1. r.content.decode("euc-kr") 명시적 처리 (r.encoding 설정 방식 제거)
-  2. "PER(배)" 정확 매칭 → 길이/조건 기반 매칭으로 변경 (인코딩 안전)
-  3. exception 시 에러 출력 추가 (디버깅용)
+  v1.1: r.content.decode("euc-kr") 명시적 처리, 조건 기반 안전 매칭
+  v1.2: 환경 자동감지 (로컬 Windows / GitHub Actions Linux) 경로 수정
 """
 
 import os, sys, time, requests, pandas as pd
 from bs4 import BeautifulSoup
 from datetime import datetime, date
 
-PIPELINE_ROOT = r"D:\AI_WorkSpace\I_SFC\09_Implementation\SFC_DataPipeline"
-OUTPUTS_DIR   = os.path.join(PIPELINE_ROOT, "outputs", "latest")
-MAX_TICKERS   = 200
-RATE_DELAY    = 0.2
+# ── 환경 자동감지 (핵심 수정 v1.2) ──
+if os.path.exists("/tmp/sfd/outputs/latest"):
+    OUTPUTS_DIR = "/tmp/sfd/outputs/latest"           # GitHub Actions (Linux)
+else:
+    PIPELINE_ROOT = r"D:\AI_WorkSpace\I_SFC\09_Implementation\SFC_DataPipeline"
+    OUTPUTS_DIR   = os.path.join(PIPELINE_ROOT, "outputs", "latest")  # 로컬 Windows
+
+MAX_TICKERS = 200
+RATE_DELAY  = 0.2
 
 HEADERS = {"User-Agent": "Mozilla/5.0", "Referer": "https://finance.naver.com/"}
 
@@ -60,24 +64,11 @@ def get_pbr_grade(pbr) -> str:
     return "EXPENSIVE"
 
 def fetch_naver_fundamental(ticker: str) -> dict:
-    """
-    [핵심 수정] r.content.decode("euc-kr") 명시적 처리
-    "PER(배)" 직접 비교 대신 길이/조건 기반 안전 매칭 사용
-    
-    debug_samsung.py 검증 결과:
-      [47] EPS(원)  → len<=8, "EPS" in, "l" not in
-      [48] PER(배)  → len<=8, "PER" in, "%" not in, "l" not in
-      [50] PBR(배)  → len<=8, "PBR" in, "l" not in
-      [83] PERlEPS(2026.03)... → "PERlEPS" in, "추정" not in
-      [84] 추정PERlEPS...       → "추정PER" in, "lEPS" in
-    """
     url = f"https://finance.naver.com/item/main.naver?code={ticker}"
     result = {"per": None, "pbr": None, "eps": None, "est_per": None}
 
     try:
         r = requests.get(url, headers=HEADERS, timeout=5)
-
-        # ── 핵심 수정: 명시적 euc-kr 디코딩 ──
         text = r.content.decode("euc-kr", errors="replace")
         soup = BeautifulSoup(text, "html.parser")
 
@@ -88,7 +79,6 @@ def fetch_naver_fundamental(ticker: str) -> dict:
                 continue
             td_text = td.get_text(strip=True)
 
-            # PER(배): len<=8, "PER" 포함, "%" 미포함, "l" 미포함
             if (result["per"] is None
                     and "PER" in th_text
                     and len(th_text) <= 8
@@ -96,23 +86,19 @@ def fetch_naver_fundamental(ticker: str) -> dict:
                     and "l" not in th_text):
                 result["per"] = safe_float(td_text)
 
-            # PBR(배): len<=8, "PBR" 포함, "l" 미포함
             if (result["pbr"] is None
                     and "PBR" in th_text
                     and len(th_text) <= 8
                     and "l" not in th_text):
                 result["pbr"] = safe_float(td_text)
 
-            # EPS(원): len<=8, "EPS" 포함, "l" 미포함
             if (result["eps"] is None
                     and "EPS" in th_text
                     and len(th_text) <= 8
                     and "l" not in th_text):
                 result["eps"] = safe_float(td_text)
 
-            # PERlEPS(연간): "PERlEPS" 포함, "추정" 미포함
-            if ("PERlEPS" in th_text
-                    and "추정" not in th_text):
+            if ("PERlEPS" in th_text and "추정" not in th_text):
                 parts = td_text.split("l")
                 if len(parts) >= 2:
                     if result["per"] is None:
@@ -120,14 +106,12 @@ def fetch_naver_fundamental(ticker: str) -> dict:
                     if result["eps"] is None:
                         result["eps"] = safe_float(parts[1])
 
-            # 추정PERlEPS
             if "추정PER" in th_text and "lEPS" in th_text:
                 parts = td_text.split("l")
                 if len(parts) >= 1:
                     result["est_per"] = safe_float(parts[0])
 
     except Exception as e:
-        # v1.1: 에러 출력 추가 (디버깅용)
         print(f"  [WARN] {ticker} fetch error: {e}")
 
     return result
@@ -149,6 +133,7 @@ def load_target_tickers() -> pd.DataFrame:
 def run():
     print(f"\n{'='*60}")
     print(f"[Layer 2.6] {datetime.now():%Y-%m-%d %H:%M:%S} (MAX={MAX_TICKERS})")
+    print(f"OUTPUTS_DIR: {OUTPUTS_DIR}")
     print(f"{'='*60}\n")
 
     target_df = load_target_tickers()
