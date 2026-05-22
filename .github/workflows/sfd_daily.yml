@@ -38,6 +38,10 @@ jobs:
         continue-on-error: true
       - name: Layer2 signal_aggregator
         run: python tools/sfd_signal_aggregator.py
+      - name: Layer2.5 rerating_watch
+        run: python tools/sfd_rerating_watch.py
+        continue-on-error: true
+
       - name: Layer3 D+1 backtest
         run: python tools/sfd_backtest_d1.py
       - name: Upload latest to Drive
@@ -54,6 +58,7 @@ jobs:
               (f'{LATEST_DIR}/sfd_prev_close_fetch.log',     GDRIVE_LATEST_FOLDER_ID),
               (f'{LATEST_DIR}/sfd_signal_aggregator.log',    GDRIVE_LATEST_FOLDER_ID),
               (f'{LATEST_DIR}/sfd_backtest_d1.log',          GDRIVE_LATEST_FOLDER_ID),
+              (f'{LATEST_DIR}/sfd_rerating_watch_latest.csv', GDRIVE_LATEST_FOLDER_ID),
               (f'{LATEST_DIR}/sfd_news_fetcher.log',         GDRIVE_LATEST_FOLDER_ID),
           ])
           EOF
