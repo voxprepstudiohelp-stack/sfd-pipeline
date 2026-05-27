@@ -38,6 +38,11 @@ jobs:
       - name: Make dirs
         run: mkdir -p /tmp/sfd/outputs/latest /tmp/sfd/outputs/history /tmp/sfd/inputs
 
+      - name: Copy static inputs
+        run: |
+          cp data/sfd_master_signal_input.csv /tmp/sfd/inputs/ || true
+          cp data/sfd_naver_news_queries.csv /tmp/sfd/inputs/ || true
+
       - name: Layer1 prev_close_fetch
         run: python tools/sfd_prev_close_fetch.py
 
