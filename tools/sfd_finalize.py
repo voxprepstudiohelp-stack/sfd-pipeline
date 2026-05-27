@@ -22,7 +22,7 @@ from datetime import datetime
 # ============================
 # 경로 설정 상수
 # ============================
-BASE_DIR = r"D:\AI_WorkSpace\I_SFC\09_Implementation\SFC_DataPipeline"
+BASE_DIR = os.environ.get("SFD_BASE_DIR", r"D:\AI_WorkSpace\I_SFC\09_Implementation\SFC_DataPipeline")
 LATEST_DIR = os.path.join(BASE_DIR, "outputs", "latest")
 ARCHIVE_DIR = os.path.join(BASE_DIR, "outputs", "archive")
 
