@@ -1,22 +1,28 @@
-# utils/gdrive_uploader.py — OAuth2 Refresh Token 버전
-# GitHub: sfd-pipeline/utils/gdrive_uploader.py
-
+# utils/gdrive_uploader.py — Service Account 버전 (만료 없음)
 import os, json
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+from google.oauth2 import service_account
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 
 def get_drive_service():
-    creds = Credentials(
-        token=None,
-        refresh_token=os.environ["GDRIVE_REFRESH_TOKEN"],
-        client_id=os.environ["GDRIVE_CLIENT_ID"],
-        client_secret=os.environ["GDRIVE_CLIENT_SECRET"],
-        token_uri="https://oauth2.googleapis.com/token",
-        scopes=["https://www.googleapis.com/auth/drive"]
-    )
-    creds.refresh(Request())
+    sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
+    if sa_json:
+        info = json.loads(sa_json)
+        creds = service_account.Credentials.from_service_account_info(
+            info, scopes=["https://www.googleapis.com/auth/drive"]
+        )
+    else:
+        creds = Credentials(
+            token=None,
+            refresh_token=os.environ["GDRIVE_REFRESH_TOKEN"],
+            client_id=os.environ["GDRIVE_CLIENT_ID"],
+            client_secret=os.environ["GDRIVE_CLIENT_SECRET"],
+            token_uri="https://oauth2.googleapis.com/token",
+            scopes=["https://www.googleapis.com/auth/drive"]
+        )
+        creds.refresh(Request())
     return build("drive", "v3", credentials=creds)
 
 def upload_or_replace(service, local_path: str, folder_id: str):
