@@ -1,16 +1,17 @@
-﻿# sfd_signal_aggregator.py | v2.2 | Claude (Anthropic) 2026-05-23 hotfix
+# sfd_signal_aggregator.py | v2.3 | Claude (Anthropic) 2026-05-29
 # Deploy to: D:\AI_WorkSpace\I_SFC\09_Implementation\SFC_DataPipeline\tools\sfd_signal_aggregator.py
 #
-# [v2.2 hotfix] config.py dependency removed
-# - config.BASE = "/tmp/sfd" is GitHub Actions path, breaks on local Windows
-# - Replaced with __file__-based path detection (same pattern as sfd_fundamental_watch.py)
-# - All path logic now self-contained, no external config required
+# [v2.3 변경사항]
+# - Layer 2.7 sfd_technical_analyzer 출력(sfd_technical_latest.csv) 연동
+# - tech_detail_score가 있으면 → 기존 basic tech_score 대체 (드롭인 교체)
+# - tech_detail_csv 없을 경우 → v2.2 기존 로직 자동 fallback (하위호환)
+# - tech_detail 컬럼 추가: poc_score, sr_score (진단용)
+# - MODE: ORIGINAL(70/50) 유지
 #
-# [v2.2 original changes]
-# - FUNDAMENTAL_CSV: sfd_fundamental_latest.csv
-# - FUND_MAX_PT = 15
-# - load_fund_score_map() + score_fundamental()
-# - "fund_score" column added to output
+# [v2.2 → v2.3 점수 구조]
+# 기존: tech_score = rsi(0~15) + ma(0~15) + vol(0~10)  → max 40
+# v2.3: tech_score = poc(0~15) + sr(0~10) + rsi(0~5) + ma(0~10)  → max 40  [Layer2.7 있을 때]
+#        fallback  = rsi(0~15) + ma(0~15) + vol(0~10)  → max 40              [Layer2.7 없을 때]
 
 import os
 import sys
@@ -22,49 +23,58 @@ import pandas as pd
 import numpy as np
 import FinanceDataReader as fdr
 
-# ── 경로 설정 (__file__ 기반, config.py 불필요)
-# tools/sfd_signal_aggregator.py -> SFC_DataPipeline root
-BASE_DIR     = os.environ.get("SFD_BASE_DIR", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-LATEST_DIR   = os.path.join(BASE_DIR, "outputs", "latest")
-HISTORY_DIR  = os.path.join(BASE_DIR, "outputs", "history")
-INPUT_DIR    = os.path.join(BASE_DIR, "inputs")
+# ── 경로 설정 ─────────────────────────────────────────────────────────────────
+_env_base = os.environ.get("SFD_BASE_DIR", "")
+if _env_base and os.path.isdir(_env_base):
+    BASE_DIR = _env_base
+else:
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+LATEST_DIR  = os.path.join(BASE_DIR, "outputs", "latest")
+HISTORY_DIR = os.path.join(BASE_DIR, "outputs", "history")
+INPUT_DIR   = os.path.join(BASE_DIR, "inputs")
 
 os.makedirs(LATEST_DIR,  exist_ok=True)
 os.makedirs(HISTORY_DIR, exist_ok=True)
 os.makedirs(INPUT_DIR,   exist_ok=True)
 
-LATEST_CSV      = os.path.join(LATEST_DIR, "sfd_master_signal_latest.csv")
-INPUT_CSV       = os.path.join(INPUT_DIR,  "sfd_master_signal_input.csv")
-LOG_PATH        = os.path.join(LATEST_DIR, "sfd_signal_aggregator.log")
-PREV_CLOSE_CSV  = os.path.join(LATEST_DIR, "sfd_prev_close_latest.csv")
-INVESTOR_CSV    = os.path.join(LATEST_DIR, "sfd_investor_flow_latest.csv")
-NEWS_SCORE_CSV  = os.path.join(LATEST_DIR, "sfd_news_score_latest.csv")
-FUNDAMENTAL_CSV = os.path.join(LATEST_DIR, "sfd_fundamental_latest.csv")
+LATEST_CSV       = os.path.join(LATEST_DIR, "sfd_master_signal_latest.csv")
+INPUT_CSV        = os.path.join(INPUT_DIR,  "sfd_master_signal_input.csv")
+LOG_PATH         = os.path.join(LATEST_DIR, "sfd_signal_aggregator.log")
+PREV_CLOSE_CSV   = os.path.join(LATEST_DIR, "sfd_prev_close_latest.csv")
+INVESTOR_CSV     = os.path.join(LATEST_DIR, "sfd_investor_flow_latest.csv")
+NEWS_SCORE_CSV   = os.path.join(LATEST_DIR, "sfd_news_score_latest.csv")
+FUNDAMENTAL_CSV  = os.path.join(LATEST_DIR, "sfd_fundamental_latest.csv")
+TECH_DETAIL_CSV  = os.path.join(LATEST_DIR, "sfd_technical_latest.csv")   # [v2.3 NEW]
 
 logging.basicConfig(
-    filename=LOG_PATH, level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s", encoding="utf-8",
+    handlers=[
+        logging.FileHandler(LOG_PATH, encoding="utf-8"),
+        logging.StreamHandler(sys.stdout),
+    ],
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
 )
 
 START_TIME = time.time()
 now        = datetime.now()
 fetch_time = now.strftime("%Y-%m-%d %H:%M:%S")
 
-RSI_PERIOD    = 14
-MA_SHORT      = 5
-MA_MID        = 20
-MA_LONG       = 60
-VOL_PERIOD    = 20
-TOP_VALUE_PCT = 0.20
+# ── 파라미터 ─────────────────────────────────────────────────────────────────
+RSI_PERIOD      = 14
+MA_SHORT        = 5
+MA_MID          = 20
+MA_LONG         = 60
+VOL_PERIOD      = 20
+TOP_VALUE_PCT   = 0.20
+FUND_MAX_PT     = 15
 
 THRESHOLD_RESERVE = 70
 THRESHOLD_WATCH   = 50
 MODE = "ORIGINAL"
-# After investor data restored: THRESHOLD_RESERVE=70, THRESHOLD_WATCH=50, MODE="ORIGINAL"
-
-FUND_MAX_PT = 15
 
 
+# ── 최근 거래일 탐색 ──────────────────────────────────────────────────────────
 def find_recent_trade_date():
     for i in range(7):
         d = now - timedelta(days=i)
@@ -74,11 +84,11 @@ def find_recent_trade_date():
             df = fdr.DataReader("005930", d_str, d_str)
             if df is not None and len(df) > 0:
                 return d.strftime("%Y%m%d")
-        except:
-            pass
+        except: pass
     return now.strftime("%Y%m%d")
 
 
+# ── 기술적 데이터 수집 (Layer 2.7 fallback용 v2.2 로직) ───────────────────────
 def calc_rsi(series, period=14):
     delta    = series.diff()
     gain     = delta.clip(lower=0)
@@ -88,7 +98,6 @@ def calc_rsi(series, period=14):
     rs       = avg_gain / avg_loss.replace(0, np.nan)
     return 100 - (100 / (1 + rs))
 
-
 def get_technical_data(ticker, end_date):
     try:
         end   = datetime.strptime(end_date, "%Y%m%d")
@@ -96,64 +105,24 @@ def get_technical_data(ticker, end_date):
         df    = fdr.DataReader(ticker, start, end.strftime("%Y-%m-%d"))
         if df is None or len(df) < MA_LONG: return None
         df = df.sort_index()
-        df["rsi"]           = calc_rsi(df["Close"], RSI_PERIOD)
+        df["rsi"]      = calc_rsi(df["Close"], RSI_PERIOD)
         df[f"ma{MA_SHORT}"] = df["Close"].rolling(MA_SHORT).mean()
         df[f"ma{MA_MID}"]   = df["Close"].rolling(MA_MID).mean()
         df[f"ma{MA_LONG}"]  = df["Close"].rolling(MA_LONG).mean()
-        df["vol_avg"]       = df["Volume"].rolling(VOL_PERIOD).mean()
+        df["vol_avg"]  = df["Volume"].rolling(VOL_PERIOD).mean()
         last = df.iloc[-1]
         return {
-            "rsi":      round(last["rsi"], 2) if not pd.isna(last["rsi"]) else None,
-            "ma_short": last[f"ma{MA_SHORT}"],
-            "ma_mid":   last[f"ma{MA_MID}"],
-            "ma_long":  last[f"ma{MA_LONG}"],
-            "volume":   last["Volume"],
-            "vol_avg":  last["vol_avg"],
+            "rsi":       round(last["rsi"], 2) if not pd.isna(last["rsi"]) else None,
+            "ma_short":  last[f"ma{MA_SHORT}"],
+            "ma_mid":    last[f"ma{MA_MID}"],
+            "ma_long":   last[f"ma{MA_LONG}"],
+            "volume":    last["Volume"],
+            "vol_avg":   last["vol_avg"],
         }
-    except:
-        return None
+    except: return None
 
 
-def load_news_score_map() -> dict:
-    if not os.path.exists(NEWS_SCORE_CSV):
-        logging.warning(f"NEWS_SCORE_CSV not found: {NEWS_SCORE_CSV}")
-        return {}
-    try:
-        df = pd.read_csv(NEWS_SCORE_CSV, encoding="utf-8-sig", dtype={"ticker": str})
-        if "ticker" not in df.columns or "news_score" not in df.columns:
-            logging.warning(f"NEWS_SCORE_CSV missing columns: {df.columns.tolist()}")
-            return {}
-        score_map = dict(zip(
-            df["ticker"].str.strip().str.zfill(6),
-            pd.to_numeric(df["news_score"], errors="coerce").fillna(0)
-        ))
-        logging.info(f"news_score_map loaded: {len(score_map)}")
-        return score_map
-    except Exception as e:
-        logging.error(f"news_score_map load failed: {e}"); return {}
-
-
-def load_fund_score_map() -> dict:
-    if not os.path.exists(FUNDAMENTAL_CSV):
-        logging.warning(f"FUNDAMENTAL_CSV not found: {FUNDAMENTAL_CSV}")
-        return {}
-    try:
-        df = pd.read_csv(FUNDAMENTAL_CSV, encoding="utf-8-sig", dtype={"ticker": str})
-        if "ticker" not in df.columns or "adjusted_fund_score" not in df.columns:
-            logging.warning(f"FUNDAMENTAL_CSV missing columns: {df.columns.tolist()}")
-            return {}
-        df["ticker"] = df["ticker"].str.strip().str.zfill(6)
-        df["_norm"] = (
-            pd.to_numeric(df["adjusted_fund_score"], errors="coerce")
-            .fillna(0).clip(upper=100).div(100).mul(FUND_MAX_PT).round(2)
-        )
-        fund_map = dict(zip(df["ticker"], df["_norm"]))
-        logging.info(f"fund_score_map loaded: {len(fund_map)}")
-        return fund_map
-    except Exception as e:
-        logging.error(f"fund_score_map load failed: {e}"); return {}
-
-
+# ── 스코어링 함수 (v2.2 기존 — fallback용) ───────────────────────────────────
 def score_rsi(rsi):
     if rsi is None: return 0
     if rsi < 30: return 15
@@ -190,8 +159,7 @@ def score_investor(ticker, investor_df):
         f = float(row.iloc[0].get("foreign_net_buy", 0))
         i = float(row.iloc[0].get("institution_net_buy", 0))
         return (10 if f > 0 else 0) + (10 if i > 0 else 0)
-    except:
-        return 0
+    except: return 0
 
 def score_theme(ticker, prev_df):
     if prev_df is None or "prev_value" not in prev_df.columns: return 0
@@ -200,8 +168,7 @@ def score_theme(ticker, prev_df):
         row = prev_df[prev_df["ticker"] == ticker]
         if row.empty: return 0
         return 10 if float(row.iloc[0]["prev_value"]) >= threshold else 0
-    except:
-        return 0
+    except: return 0
 
 def classify_signal(total_score):
     if total_score >= THRESHOLD_RESERVE: return "RESERVE_BUY"
@@ -209,26 +176,90 @@ def classify_signal(total_score):
     return "HOLD"
 
 
+# ── [v2.3] Layer 2.7 tech_detail_score 로드 ──────────────────────────────────
+def load_tech_detail_map() -> dict:
+    """
+    sfd_technical_latest.csv → {ticker: {tech_detail_score, poc_score, sr_score}} 맵
+    파일 없으면 빈 dict 반환 (v2.2 fallback 모드)
+    """
+    if not os.path.exists(TECH_DETAIL_CSV):
+        logging.warning(f"[v2.3] TECH_DETAIL_CSV not found: {TECH_DETAIL_CSV}")
+        logging.warning("[v2.3] Fallback to v2.2 basic tech_score")
+        return {}
+    try:
+        df = pd.read_csv(TECH_DETAIL_CSV, encoding="utf-8-sig", dtype={"ticker": str})
+        required = {"ticker", "tech_detail_score"}
+        if not required.issubset(df.columns):
+            logging.warning(f"[v2.3] TECH_DETAIL_CSV missing cols: {df.columns.tolist()}")
+            return {}
+        tech_map = {}
+        for _, row in df.iterrows():
+            t = str(row["ticker"]).strip().zfill(6)
+            tech_map[t] = {
+                "tech_detail_score": float(row.get("tech_detail_score", 0)),
+                "poc_score":         float(row.get("poc_score",         0)),
+                "sr_score":          float(row.get("sr_score",          0)),
+                "rsi":               float(row.get("rsi",               50)),
+                "ma_label":          str(row.get("ma_label",            "")),
+            }
+        logging.info(f"[v2.3] tech_detail_map loaded: {len(tech_map)} tickers")
+        return tech_map
+    except Exception as e:
+        logging.error(f"[v2.3] tech_detail_map load failed: {e}")
+        return {}
+
+
+# ── 보조 데이터 로더 ──────────────────────────────────────────────────────────
+def load_news_score_map() -> dict:
+    if not os.path.exists(NEWS_SCORE_CSV): return {}
+    try:
+        df = pd.read_csv(NEWS_SCORE_CSV, encoding="utf-8-sig", dtype={"ticker": str})
+        if "ticker" not in df.columns or "news_score" not in df.columns: return {}
+        return dict(zip(
+            df["ticker"].str.strip().str.zfill(6),
+            pd.to_numeric(df["news_score"], errors="coerce").fillna(0)
+        ))
+    except: return {}
+
+def load_fund_score_map() -> dict:
+    if not os.path.exists(FUNDAMENTAL_CSV): return {}
+    try:
+        df = pd.read_csv(FUNDAMENTAL_CSV, encoding="utf-8-sig", dtype={"ticker": str})
+        if "ticker" not in df.columns or "adjusted_fund_score" not in df.columns: return {}
+        df["ticker"] = df["ticker"].str.strip().str.zfill(6)
+        df["_norm"]  = (
+            pd.to_numeric(df["adjusted_fund_score"], errors="coerce")
+            .fillna(0).clip(upper=100).div(100).mul(FUND_MAX_PT).round(2)
+        )
+        return dict(zip(df["ticker"], df["_norm"]))
+    except: return {}
+
+
+# ── 메인 ──────────────────────────────────────────────────────────────────────
 def main():
-    logging.info("=== sfd_signal_aggregator v2.2 START ===")
-    logging.info(f"BASE_DIR:   {BASE_DIR}")
-    logging.info(f"LATEST_DIR: {LATEST_DIR}")
+    logging.info("=== sfd_signal_aggregator v2.3 START ===")
+    logging.info(f"BASE_DIR:    {BASE_DIR}")
+    logging.info(f"LATEST_DIR:  {LATEST_DIR}")
 
     trade_date = find_recent_trade_date()
     logging.info(f"trade_date: {trade_date}")
 
-    if not os.path.exists(INPUT_CSV):
-        logging.error(f"INPUT_CSV not found: {INPUT_CSV}"); return
-    if not os.path.exists(PREV_CLOSE_CSV):
-        logging.error(f"PREV_CLOSE_CSV not found: {PREV_CLOSE_CSV}"); return
+    # 필수 파일 체크
+    for path, label in [(INPUT_CSV, "INPUT_CSV"), (PREV_CLOSE_CSV, "PREV_CLOSE_CSV")]:
+        if not os.path.exists(path):
+            logging.error(f"{label} not found: {path}"); return
 
-    input_df    = pd.read_csv(INPUT_CSV,      encoding="utf-8-sig", dtype={"ticker": str})
-    prev_df     = pd.read_csv(PREV_CLOSE_CSV, encoding="utf-8-sig", dtype={"ticker": str})
-    investor_df = pd.read_csv(INVESTOR_CSV,   encoding="utf-8-sig", dtype={"ticker": str}) \
+    input_df    = pd.read_csv(INPUT_CSV,       encoding="utf-8-sig", dtype={"ticker": str})
+    prev_df     = pd.read_csv(PREV_CLOSE_CSV,  encoding="utf-8-sig", dtype={"ticker": str})
+    investor_df = pd.read_csv(INVESTOR_CSV,    encoding="utf-8-sig", dtype={"ticker": str}) \
                   if os.path.exists(INVESTOR_CSV) else None
 
-    news_score_map = load_news_score_map()
-    fund_map       = load_fund_score_map()
+    news_score_map  = load_news_score_map()
+    fund_map        = load_fund_score_map()
+    tech_detail_map = load_tech_detail_map()          # [v2.3]
+
+    use_tech_detail = len(tech_detail_map) > 0
+    logging.info(f"[v2.3] use_tech_detail: {use_tech_detail} | tickers_in_map: {len(tech_detail_map)}")
 
     if "prev_value" in prev_df.columns:
         prev_df["prev_value"] = pd.to_numeric(prev_df["prev_value"], errors="coerce").fillna(0)
@@ -238,10 +269,38 @@ def main():
 
     results = []
     for ticker in tickers:
-        tech = get_technical_data(ticker, trade_date)
-        if tech is None: continue
 
-        t_score  = score_rsi(tech["rsi"]) + score_ma(tech["ma_short"], tech["ma_mid"], tech["ma_long"]) + score_volume(tech["volume"], tech["vol_avg"])
+        # [v2.3] tech_score 결정: Layer 2.7 우선, 없으면 v2.2 fallback
+        if use_tech_detail and ticker in tech_detail_map:
+            td      = tech_detail_map[ticker]
+            t_score = td["tech_detail_score"]
+            rsi_val = td["rsi"]
+            ma_align = td["ma_label"]
+            poc_s   = td["poc_score"]
+            sr_s    = td["sr_score"]
+            vol_ratio = 0.0   # v2.3에서 vol_ratio는 diagnostic용으로만 유지
+            tech_source = "L2.7"
+
+            # vol_ratio는 기존 prev_close에서 보조 계산
+            pc_row = prev_df[prev_df["ticker"] == ticker]
+            if not pc_row.empty and "volume" in pc_row.columns and "vol_avg" in pc_row.columns:
+                try:
+                    vol = float(pc_row.iloc[0].get("volume", 0))
+                    vavg = float(pc_row.iloc[0].get("vol_avg", 1))
+                    vol_ratio = round(vol / vavg, 2) if vavg > 0 else 0.0
+                except: pass
+        else:
+            # v2.2 fallback: fdr 직접 호출
+            tech = get_technical_data(ticker, trade_date)
+            if tech is None: continue
+            t_score   = score_rsi(tech["rsi"]) + score_ma(tech["ma_short"], tech["ma_mid"], tech["ma_long"]) + score_volume(tech["volume"], tech["vol_avg"])
+            rsi_val   = tech["rsi"]
+            ma_align  = "up" if tech["ma_short"] and tech["ma_mid"] and tech["ma_long"] \
+                               and tech["ma_short"] > tech["ma_mid"] > tech["ma_long"] else "down"
+            vol_ratio = round(tech["volume"] / tech["vol_avg"], 2) if tech["vol_avg"] and tech["vol_avg"] > 0 else 0
+            poc_s = sr_s = 0
+            tech_source = "v2.2"
+
         n_score  = score_news(ticker, news_score_map)
         i_score  = score_investor(ticker, investor_df)
         th_score = score_theme(ticker, prev_df)
@@ -253,18 +312,24 @@ def main():
         name     = name_row.iloc[0].get("name", "") if not name_row.empty else ""
 
         results.append({
-            "fetch_date": trade_date, "fetch_time": fetch_time,
-            "ticker": ticker, "name": name, "signal": signal,
-            "total_score": total, "tech_score": t_score,
-            "news_score": round(n_score, 2), "investor_score": i_score,
-            "theme_score": th_score,
-            "fund_score": round(f_score, 2),
-            "rsi": tech["rsi"],
-            "ma_align": "up" if tech["ma_short"] and tech["ma_mid"] and tech["ma_long"]
-                              and tech["ma_short"] > tech["ma_mid"] > tech["ma_long"] else "down",
-            "vol_ratio": round(tech["volume"] / tech["vol_avg"], 2)
-                         if tech["vol_avg"] and tech["vol_avg"] > 0 else 0,
-            "mode": MODE,
+            "fetch_date":    trade_date,
+            "fetch_time":    fetch_time,
+            "ticker":        ticker,
+            "name":          name,
+            "signal":        signal,
+            "total_score":   total,
+            "tech_score":    t_score,
+            "poc_score":     poc_s,          # [v2.3 NEW]
+            "sr_score":      sr_s,           # [v2.3 NEW]
+            "tech_source":   tech_source,    # [v2.3 NEW] "L2.7" or "v2.2"
+            "news_score":    round(n_score, 2),
+            "investor_score": i_score,
+            "theme_score":   th_score,
+            "fund_score":    round(f_score, 2),
+            "rsi":           rsi_val,
+            "ma_align":      ma_align,
+            "vol_ratio":     vol_ratio,
+            "mode":          MODE,
         })
 
     df_out = pd.DataFrame(results).sort_values("total_score", ascending=False).reset_index(drop=True)
@@ -274,9 +339,10 @@ def main():
     elapsed = int(time.time() - START_TIME)
     reserve = len(df_out[df_out["signal"] == "RESERVE_BUY"])
     watch   = len(df_out[df_out["signal"] == "WATCH_ONLY"])
-    logging.info(f"DONE | RESERVE={reserve} WATCH={watch} elapsed={elapsed}s MODE={MODE}")
-    print(f"[OK] RESERVE={reserve} | WATCH={watch} | elapsed={elapsed}s | MODE={MODE}")
-    print(f"     -> {LATEST_CSV}")
+    l27_cnt = len(df_out[df_out["tech_source"] == "L2.7"])
+    logging.info(f"DONE | RESERVE={reserve} WATCH={watch} L2.7={l27_cnt}/{len(df_out)} elapsed={elapsed}s MODE={MODE}")
+    print(f"[OK] RESERVE={reserve} | WATCH={watch} | L2.7={l27_cnt}/{len(df_out)} | elapsed={elapsed}s | MODE={MODE}")
+    print(f"  -> {LATEST_CSV}")
 
 
 if __name__ == "__main__":

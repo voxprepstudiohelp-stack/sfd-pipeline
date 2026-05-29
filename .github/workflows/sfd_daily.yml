@@ -54,6 +54,14 @@ jobs:
         run: python tools/sfd_news_fetcher.py
         continue-on-error: true
 
+      - name: Layer2.7 technical_analyzer
+        run: python tools/sfd_technical_analyzer.py
+        continue-on-error: true
+
+      - name: Layer2.8 oscillation_analyzer
+        run: python tools/sfd_oscillation_analyzer.py
+        continue-on-error: true
+
       - name: Layer2 signal_aggregator
         run: python tools/sfd_signal_aggregator.py
 
@@ -82,7 +90,7 @@ jobs:
 
       - name: Upload latest to Drive
         run: |
-          python - <<'EOF'
+          python - <<'PYEOF'
           import glob
           from utils.gdrive_uploader import upload_batch
           from config import LATEST_DIR, GDRIVE_LATEST_FOLDER_ID
@@ -90,6 +98,8 @@ jobs:
               (f'{LATEST_DIR}/sfd_prev_close_latest.csv',          GDRIVE_LATEST_FOLDER_ID),
               (f'{LATEST_DIR}/sfd_news_signal_latest.csv',         GDRIVE_LATEST_FOLDER_ID),
               (f'{LATEST_DIR}/sfd_news_score_latest.csv',          GDRIVE_LATEST_FOLDER_ID),
+              (f'{LATEST_DIR}/sfd_technical_latest.csv',           GDRIVE_LATEST_FOLDER_ID),
+              (f'{LATEST_DIR}/sfd_oscillation_latest.csv',         GDRIVE_LATEST_FOLDER_ID),
               (f'{LATEST_DIR}/sfd_master_signal_latest.csv',       GDRIVE_LATEST_FOLDER_ID),
               (f'{LATEST_DIR}/sfd_rerating_watch_latest.csv',      GDRIVE_LATEST_FOLDER_ID),
               (f'{LATEST_DIR}/sfd_fundamental_latest.csv',         GDRIVE_LATEST_FOLDER_ID),
@@ -102,14 +112,14 @@ jobs:
               (f'{LATEST_DIR}/sfd_backtest_d1.log',                GDRIVE_LATEST_FOLDER_ID),
               (f'{LATEST_DIR}/sfd_news_fetcher.log',               GDRIVE_LATEST_FOLDER_ID),
           ])
-          EOF
+          PYEOF
 
       - name: Upload history to Drive
         run: |
-          python - <<'EOF'
+          python - <<'PYEOF'
           import glob
           from utils.gdrive_uploader import upload_batch
           from config import HISTORY_DIR, GDRIVE_HISTORY_FOLDER_ID
           files = glob.glob(f'{HISTORY_DIR}/**/*.csv', recursive=True)
           upload_batch([(f, GDRIVE_HISTORY_FOLDER_ID) for f in files])
-          EOF
+          PYEOF
