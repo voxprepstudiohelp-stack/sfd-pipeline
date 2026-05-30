@@ -44,6 +44,7 @@ jobs:
           cp data/sfd_naver_news_queries.csv /tmp/sfd/inputs/ || true
           cp data/sfd_company_master_v1.4_sector_filled.csv /tmp/sfd/data/ || true
           cp portfolio.json /tmp/sfd/ || true
+          cp portfolio.json /tmp/sfd/data/ || true
 
       - name: Layer1 prev_close_fetch
         run: python tools/sfd_prev_close_fetch.py
@@ -125,4 +126,5 @@ jobs:
           files = glob.glob(f'{HISTORY_DIR}/**/*.csv', recursive=True)
           upload_batch([(f, GDRIVE_HISTORY_FOLDER_ID) for f in files])
           PYEOF
+
 
