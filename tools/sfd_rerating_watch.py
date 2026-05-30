@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 sfd_rerating_watch.py v1.3
 SFD Pipeline — Layer 2.5 (Re-rating Watch Board)
@@ -128,8 +128,8 @@ def evaluate_flags(row: pd.Series):
         flags.append(f"NEWS>={TH['news_score_min']}")
     if pd.notna(row.get("vol_ratio")) and row["vol_ratio"] >= TH["vol_ratio_min"]:
         flags.append(f"VOL>={TH['vol_ratio_min']}x")
-    rsi_ok      = pd.notna(row.get("rsi"))      and row["rsi"]      >= TH["rsi_min"]
-    ma_align_ok = pd.notna(row.get("ma_align")) and row["ma_align"] >= TH["ma_align_min"]
+    rsi_ok      = pd.notna(row.get("rsi"))      and float(row["rsi"])      >= TH["rsi_min"]
+    ma_align_ok = pd.notna(row.get("ma_align")) and int(row["ma_align"]) >= TH["ma_align_min"]
     if rsi_ok or ma_align_ok:
         flags.append(f"RSI>={TH['rsi_min']}" if rsi_ok else f"MA_ALIGN>={TH['ma_align_min']}")
 
@@ -212,3 +212,4 @@ def build_rerating_watch():
 
 if __name__ == "__main__":
     build_rerating_watch()
+
