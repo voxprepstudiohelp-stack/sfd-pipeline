@@ -91,6 +91,11 @@ jobs:
         run: python tools/sfd_portfolio_monitor.py
         continue-on-error: true
 
+      # ★ V7.4 신규 — Layer 5.5 Trade Guardian
+      - name: Layer5.5 trade_guardian
+        run: python sfd_trade_guardian.py
+        continue-on-error: true
+
       - name: Upload latest to Drive
         run: |
           python - <<'PYEOF'
@@ -110,6 +115,7 @@ jobs:
               (f'{LATEST_DIR}/sfd_backtest_d1_latest.csv',         GDRIVE_LATEST_FOLDER_ID),
               (f'{LATEST_DIR}/sfd_final_signal_latest.csv',        GDRIVE_LATEST_FOLDER_ID),
               (f'{LATEST_DIR}/sfd_portfolio_monitor_latest.csv',   GDRIVE_LATEST_FOLDER_ID),
+              (f'{LATEST_DIR}/guardian_alerts.json',               GDRIVE_LATEST_FOLDER_ID),
               (f'{LATEST_DIR}/sfd_prev_close_fetch.log',           GDRIVE_LATEST_FOLDER_ID),
               (f'{LATEST_DIR}/sfd_signal_aggregator.log',          GDRIVE_LATEST_FOLDER_ID),
               (f'{LATEST_DIR}/sfd_backtest_d1.log',                GDRIVE_LATEST_FOLDER_ID),
@@ -126,5 +132,3 @@ jobs:
           files = glob.glob(f'{HISTORY_DIR}/**/*.csv', recursive=True)
           upload_batch([(f, GDRIVE_HISTORY_FOLDER_ID) for f in files])
           PYEOF
-
-
