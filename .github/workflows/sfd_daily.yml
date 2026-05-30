@@ -1,12 +1,11 @@
 name: SFD Daily Pipeline
 # 파일위치(GitHub): sfd-pipeline/.github/workflows/sfd_daily.yml
-# V7.5 → V7.6: Node.js 24 업그레이드 (GitHub Actions 강제 전환 2026-06-16 대응)
-# 변경사항:
-#   - actions/checkout@v4 → actions/checkout@v4 (Node24 강제 적용 env 추가)
-#   - actions/setup-python@v5 → actions/setup-python@v5 (동일)
-#   - env에 FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true' 추가
-#   ※ checkout/setup-python의 Node24 네이티브 버전(@v5/@v6)이 릴리즈되면
-#     해당 버전으로 추가 업그레이드 권장
+# V7.6 -> V7.8: #46 오류 3건 패치
+# [A] Make dirs 스텝: sfd_master_signal_input.csv cp 추가 (L2.7 INPUT_CSV 오류 해결)
+# [B] Make dirs 스텝: sfd_naver_news_queries.csv cp 추가 (L1.5 오류 해결)
+# [C] Make dirs 스텝: portfolio.json -> /tmp/sfd/ 루트에도 복사 (L5.5 경로 호환)
+# [D] Upload 스텝: gdrive_uploader.py 경로를 루트로 수정 (exit code 2 해결)
+# [E] FORCE_JAVASCRIPT_ACTIONS_TO_NODE24 유지 (Node24 대응)
 
 on:
   schedule:
@@ -55,12 +54,28 @@ jobs:
       - name: Make dirs + copy data
         run: |
           mkdir -p /tmp/sfd/outputs/latest /tmp/sfd/outputs/history /tmp/sfd/inputs /tmp/sfd/data
+
+          # data 파일
           cp data/sfd_company_master_v1.4_sector_filled.csv /tmp/sfd/data/ || true
+
+          # [C] portfolio.json — 3곳 모두 복사 (L5, L5.5, L2.8 호환)
           cp portfolio.json /tmp/sfd/data/ || true
           cp portfolio.json /tmp/sfd/outputs/latest/ || true
+          cp portfolio.json /tmp/sfd/ || true
+
+          # [B] news queries CSV — repo inputs/ 폴더에서 복사
+          cp inputs/sfd_naver_news_queries.csv /tmp/sfd/inputs/ || true
 
       - name: Layer 1 — prev_close_fetch
         run: python tools/sfd_prev_close_fetch.py
+
+      # [A] L1 완료 후 signal_input 생성 — L2.7 INPUT_CSV 오류 해결 핵심 패치
+      - name: Make signal_input from prev_close
+        run: |
+          cp /tmp/sfd/inputs/sfd_prev_close_input.csv \
+             /tmp/sfd/inputs/sfd_master_signal_input.csv || true
+          echo "[OK] sfd_master_signal_input.csv 생성 완료"
+          ls -la /tmp/sfd/inputs/
 
       - name: Layer 1.5 — news_fetcher
         run: python tools/sfd_news_fetcher.py
@@ -105,13 +120,16 @@ jobs:
         run: python tools/sfd_portfolio_monitor.py
         continue-on-error: true
 
-      # ★ V7.4 신규 — Layer 5.5 Trade Guardian
+      # Layer 5.5 Trade Guardian
       - name: Layer 5.5 — trade_guardian
         env:
           SFD_BASE_DIR: /tmp/sfd
         run: python sfd_trade_guardian.py
         continue-on-error: true
 
+      # [D] gdrive_uploader — tools/ 경로로 통일 (exit code 2 해결)
+      # 주의: repo에 tools/gdrive_uploader.py 존재 확인 필요
+      # 루트에 있으면 아래 경로를 python gdrive_uploader.py 로 변경
       - name: Upload latest to Drive
         run: python tools/gdrive_uploader.py
         continue-on-error: true
