@@ -1,0 +1,12 @@
+﻿group,query,priority,enabled,notes
+AI_SEMICON,AI 반도체,1,Y,AI 반도체 핵심 뉴스
+AI_SEMICON,HBM 삼성전자 SK하이닉스,1,Y,HBM/메모리 선행 뉴스
+AI_CAPEX,AI CAPEX 데이터센터,1,Y,미국 빅테크 투자 연결
+GRID_POWER,데이터센터 전력 부족,1,Y,전력 인프라 핵심
+GRID_POWER,전력망 전선 변압기,1,Y,전선/변압기 테마
+NUCLEAR,원전 SMR 두산에너빌리티,1,Y,원전/에너지 안보
+SHIPBUILDING,조선 수주 LNG선 삼성중공업,2,Y,조선/에너지 인프라
+COPPER,구리 전선 KBI메탈 대한전선 대원전선,2,Y,구리/전선 소재
+POLICY,산업부 과기부 금융위 정부 정책 국가전략기술,1,Y,정책 수혜
+RISK_EVENT,중동 전쟁 환율 유가 금리 황사,2,Y,리스크 이벤트
+ENERGY_CURRENCY,에너지가 화폐 AI 전력 인프라,1,Y,Energy is Currency 미래학 태그
