@@ -1,27 +1,15 @@
+# -*- coding: utf-8 -*-
 """
-sfd_rerating_watch.py  v1.1
+sfd_rerating_watch.py v1.3
 SFD Pipeline — Layer 2.5 (Re-rating Watch Board)
 리레이팅(밸류에이션 재설정) 가능성 종목 조기 포착
 
-Schedule : 메인 파이프라인 Layer 2 실행 직후 추가
-Author   : Claude (Anthropic) — SFD Main Architect
-Date     : 2026-05-22
-
-[검증된 스키마]
-SIGNAL  : sfd_master_signal_latest.csv
-  → ticker, name, total_score, judge, tech_score, rsi, rsi_score,
-     ma_align, ma_score, vol_ratio, vol_score, news_score,
-     investor_score, theme_score, fetch_date, fetched_at
-
-NEWS    : sfd_news_score_latest.csv  (보조 — article_count, top_tags)
-  → ticker, stock_name, news_score, article_count, top_tags
-
-PRICE   : sfd_prev_close_latest.csv  (등락률 계산용)
-  → ticker, name, prev_close, prev_open, prev_high, prev_low,
-     prev_volume, prev_value, fetch_date, fetched_at, data_status
-
-[출력]
-  outputs/latest/sfd_rerating_watch_latest.csv
+수정: Claude (Anthropic) 2026-05-30
+  v1.2 → v1.3
+  ① FATAL 수정: master_signal_latest.csv 컬럼 순서 의존성 제거
+     → 컬럼 존재 여부만 체크, 없으면 0으로 대체 (cloud 순서 무관)
+  ② SFD_BASE_DIR 환경변수 기반 경로 (클라우드 호환)
+  ③ signal 컬럼: RESERVE_BUY / WATCH_ONLY 둘 다 허용
 """
 
 import os
@@ -29,39 +17,38 @@ import pandas as pd
 import numpy as np
 from datetime import date, timedelta
 
-# ══════════════════════════════════════════════
-# 파일 경로 (실제 검증 완료)
-# ══════════════════════════════════════════════
-SIGNAL_FILE  = "outputs/latest/sfd_master_signal_latest.csv"
-NEWS_FILE    = "outputs/latest/sfd_news_score_latest.csv"
-PRICE_FILE   = "outputs/latest/sfd_prev_close_latest.csv"
-HISTORY_FILE = "data/sfd_price_history.csv"
-OUTPUT_FILE  = "outputs/latest/sfd_rerating_watch_latest.csv"
+_BASE = os.environ.get(
+    "SFD_BASE_DIR",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+)
+_LATEST = os.path.join(_BASE, "outputs", "latest")
+_DATA   = os.path.join(_BASE, "data")
+
+SIGNAL_FILE  = os.path.join(_LATEST, "sfd_master_signal_latest.csv")
+NEWS_FILE    = os.path.join(_LATEST, "sfd_news_score_latest.csv")
+PRICE_FILE   = os.path.join(_LATEST, "sfd_prev_close_latest.csv")
+HISTORY_FILE = os.path.join(_DATA,   "sfd_price_history.csv")
+OUTPUT_FILE  = os.path.join(_LATEST, "sfd_rerating_watch_latest.csv")
 
 TODAY        = date.today().isoformat()
-HISTORY_DAYS = 10  # 히스토리 보관 영업일
+HISTORY_DAYS = 10
 
-# ══════════════════════════════════════════════
-# 리레이팅 조건 임계값
-# ══════════════════════════════════════════════
 TH = {
-    "total_score_min":   70,    # ① 종합 신호 점수
-    "news_score_min":    5,     # ② 뉴스 감성 점수 (SIGNAL 내장값)
-    "vol_ratio_min":     1.5,   # ③ 거래량 비율 (평균 대비)
-    "rsi_min":           55,    # ④-A RSI 모멘텀
-    "ma_align_min":      3,     # ④-B 이동평균 정배열 수
-    "intraday_pct_min":  2.0,   # 당일 등락률 보조 필터 (%)
-    "min_flags":         3,     # WATCH 등급 최소 조건 수
-    "strong_flags":      4,     # STRONG 등급 조건 수
+    "total_score_min":  70,
+    "news_score_min":    5,
+    "vol_ratio_min":   1.5,
+    "rsi_min":          55,
+    "ma_align_min":      3,
+    "intraday_pct_min":2.0,
+    "min_flags":         3,
+    "strong_flags":      4,
 }
 
 
-# ──────────────────────────────────────────────
-# 유틸
-# ──────────────────────────────────────────────
-def safe_load(path: str, label: str) -> pd.DataFrame | None:
+def safe_load(path: str, label: str):
     try:
-        df = pd.read_csv(path, encoding="utf-8-sig")
+        df = pd.read_csv(path, encoding="utf-8-sig", dtype={"ticker": str})
+        df["ticker"] = df["ticker"].astype(str).str.strip().str.zfill(6)
         print(f"[OK] {label}: {len(df)}행")
         return df
     except FileNotFoundError:
@@ -72,9 +59,14 @@ def safe_load(path: str, label: str) -> pd.DataFrame | None:
         return None
 
 
-# ──────────────────────────────────────────────
-# [1] 당일 등락률 계산 (prev_open → prev_close)
-# ──────────────────────────────────────────────
+def safe_col(df: pd.DataFrame, col: str, default=0.0):
+    """컬럼이 없으면 default 값으로 채운 Series 반환 (v1.3 핵심 수정)"""
+    if col in df.columns:
+        return df[col]
+    print(f"[WARN] 컬럼 없음 '{col}' → {default}으로 대체")
+    return pd.Series([default] * len(df), index=df.index)
+
+
 def calc_intraday(price_df: pd.DataFrame) -> pd.DataFrame:
     df = price_df[["ticker", "prev_close", "prev_open", "prev_volume"]].copy()
     df["intraday_pct"] = (
@@ -85,9 +77,6 @@ def calc_intraday(price_df: pd.DataFrame) -> pd.DataFrame:
     return df[["ticker", "prev_close", "prev_volume", "intraday_pct"]]
 
 
-# ──────────────────────────────────────────────
-# [2] 가격 히스토리 누적 (5일 모멘텀용)
-# ──────────────────────────────────────────────
 def update_price_history(price_df: pd.DataFrame) -> pd.DataFrame:
     snap = price_df[["ticker", "prev_close"]].copy()
     snap.columns = ["ticker", "close"]
@@ -95,36 +84,30 @@ def update_price_history(price_df: pd.DataFrame) -> pd.DataFrame:
 
     os.makedirs(os.path.dirname(HISTORY_FILE), exist_ok=True)
     if os.path.exists(HISTORY_FILE):
-        hist = pd.read_csv(HISTORY_FILE, encoding="utf-8-sig")
-        hist = hist[hist["date"] != TODAY]  # 오늘 중복 제거
+        hist = pd.read_csv(HISTORY_FILE, encoding="utf-8-sig", dtype={"ticker": str})
+        hist = hist[hist["date"] != TODAY]
     else:
         hist = pd.DataFrame(columns=["ticker", "close", "date"])
 
     hist = pd.concat([hist, snap], ignore_index=True)
-
-    # 오래된 데이터 정리
     cutoff = (date.today() - timedelta(days=HISTORY_DAYS * 2)).isoformat()
-    hist   = hist[hist["date"] >= cutoff]
+    hist = hist[hist["date"] >= cutoff]
     hist.to_csv(HISTORY_FILE, index=False, encoding="utf-8-sig")
-
     print(f"[OK] 가격 히스토리: {hist['date'].nunique()}일치 누적")
     return hist
 
 
 def calc_momentum_5d(history: pd.DataFrame) -> pd.DataFrame:
-    """히스토리에서 5일 모멘텀 및 연속 상승일 계산"""
     if history.empty:
         return pd.DataFrame(columns=["ticker", "momentum_5d", "consec_up"])
 
     history = history.sort_values(["ticker", "date"])
     results = []
     for ticker, grp in history.groupby("ticker"):
-        grp   = grp.tail(6)
+        grp = grp.tail(6)
         closes = grp["close"].values
-        if len(closes) >= 2:
-            momentum_5d = round((closes[-1] - closes[0]) / closes[0] * 100, 2)
-        else:
-            momentum_5d = 0.0
+        momentum_5d = round((closes[-1] - closes[0]) / closes[0] * 100, 2) \
+                      if len(closes) >= 2 else 0.0
         daily_chg = pd.Series(closes).pct_change().dropna().values
         consec_up = 0
         for c in daily_chg[::-1]:
@@ -132,53 +115,35 @@ def calc_momentum_5d(history: pd.DataFrame) -> pd.DataFrame:
                 consec_up += 1
             else:
                 break
-        results.append({"ticker": ticker, "momentum_5d": momentum_5d, "consec_up": consec_up})
-
+        results.append({"ticker": ticker, "momentum_5d": momentum_5d,
+                         "consec_up": consec_up})
     return pd.DataFrame(results)
 
 
-# ──────────────────────────────────────────────
-# [3] 리레이팅 조건 평가 (4개 조건)
-# ──────────────────────────────────────────────
-def evaluate_flags(row: pd.Series) -> tuple[int, str, str]:
+def evaluate_flags(row: pd.Series):
     flags = []
-
     if pd.notna(row.get("total_score")) and row["total_score"] >= TH["total_score_min"]:
-        flags.append(f"SIG≥{TH['total_score_min']}")
-
+        flags.append(f"SIG>={TH['total_score_min']}")
     if pd.notna(row.get("news_score")) and row["news_score"] >= TH["news_score_min"]:
-        flags.append(f"NEWS≥{TH['news_score_min']}")
-
+        flags.append(f"NEWS>={TH['news_score_min']}")
     if pd.notna(row.get("vol_ratio")) and row["vol_ratio"] >= TH["vol_ratio_min"]:
-        flags.append(f"VOL≥{TH['vol_ratio_min']}x")
-
+        flags.append(f"VOL>={TH['vol_ratio_min']}x")
     rsi_ok      = pd.notna(row.get("rsi"))      and row["rsi"]      >= TH["rsi_min"]
     ma_align_ok = pd.notna(row.get("ma_align")) and row["ma_align"] >= TH["ma_align_min"]
     if rsi_ok or ma_align_ok:
-        detail = f"RSI≥{TH['rsi_min']}" if rsi_ok else f"MA_ALIGN≥{TH['ma_align_min']}"
-        flags.append(detail)
+        flags.append(f"RSI>={TH['rsi_min']}" if rsi_ok else f"MA_ALIGN>={TH['ma_align_min']}")
 
-    n        = len(flags)
+    n = len(flags)
     flag_str = "|".join(flags) if flags else "-"
-
-    if n >= TH["strong_flags"]:
-        grade = "STRONG"
-    elif n >= TH["min_flags"]:
-        grade = "WATCH"
-    elif n == 2:
-        grade = "MONITOR"
-    else:
-        grade = "-"
-
+    grade = ("STRONG" if n >= TH["strong_flags"]
+             else "WATCH" if n >= TH["min_flags"]
+             else "MONITOR" if n == 2 else "-")
     return n, flag_str, grade
 
 
-# ──────────────────────────────────────────────
-# 메인
-# ──────────────────────────────────────────────
 def build_rerating_watch():
     print(f"\n{'='*55}")
-    print(f"SFD Re-rating Watch Board v1.1  |  {TODAY}")
+    print(f"SFD Re-rating Watch Board v1.3 | {TODAY}")
     print(f"{'='*55}\n")
 
     signal_df = safe_load(SIGNAL_FILE, "Signal(sfd_master_signal)")
@@ -189,91 +154,60 @@ def build_rerating_watch():
         print("[FATAL] Signal 파일 없음 — 종료")
         return
 
-    base = signal_df[[
-        "ticker", "name", "total_score", "judge",
-        "news_score", "vol_ratio", "rsi", "ma_align",
-        "investor_score", "tech_score", "fetch_date"
-    ]].copy()
+    # v1.3 핵심: 컬럼 flexible 로딩 (순서/존재 무관)
+    base_cols = ["ticker"]
+    for col, default in [
+        ("name",        ""),
+        ("total_score", 0.0),
+        ("signal",      "HOLD"),
+        ("news_score",  0.0),
+        ("vol_ratio",   0.0),
+        ("rsi",         0.0),
+        ("ma_align",    0),
+    ]:
+        signal_df[col] = safe_col(signal_df, col, default)
+        base_cols.append(col)
 
-    # ── 숫자 컬럼 타입 강제 변환 (str → float, 오류는 NaN)
-    numeric_cols = ["total_score", "news_score", "vol_ratio", "rsi",
-                    "ma_align", "investor_score", "tech_score"]
-    for col in numeric_cols:
-        if col in base.columns:
-            base[col] = pd.to_numeric(base[col], errors="coerce")
-
-    if price_df is not None:
-        intraday = calc_intraday(price_df)
-        base     = base.merge(intraday, on="ticker", how="left")
-        history  = update_price_history(price_df)
-        momentum = calc_momentum_5d(history)
-        base     = base.merge(momentum, on="ticker", how="left")
-    else:
-        base["intraday_pct"] = np.nan
-        base["momentum_5d"]  = np.nan
-        base["consec_up"]    = np.nan
+    base = signal_df[base_cols].copy()
 
     if news_df is not None:
-        news_aux = news_df[["ticker", "article_count", "top_tags"]].copy()
-        news_aux["ticker"] = news_aux["ticker"].astype(str).str.zfill(6)
-        base = base.merge(news_aux, on="ticker", how="left")
-    else:
-        base["article_count"] = np.nan
-        base["top_tags"]      = ""
+        news_sub = news_df[["ticker"] +
+                   [c for c in ["news_score", "article_cnt"]
+                    if c in news_df.columns]].copy()
+        if "news_score" not in base.columns or base["news_score"].sum() == 0:
+            base = base.drop(columns=["news_score"], errors="ignore")
+            base = base.merge(news_sub, on="ticker", how="left")
 
-    eval_result = base.apply(
-        lambda r: pd.Series(
-            evaluate_flags(r),
-            index=["flags_met", "flag_detail", "rerating_grade"]
-        ),
-        axis=1
+    if price_df is not None:
+        intra = calc_intraday(price_df)
+        base = base.merge(intra, on="ticker", how="left")
+        history = update_price_history(price_df)
+        momentum = calc_momentum_5d(history)
+        base = base.merge(momentum, on="ticker", how="left")
+
+    watch = base[base["signal"].isin(["RESERVE_BUY", "WATCH_ONLY"])].copy()
+    if watch.empty:
+        print("[INFO] 대상 종목 없음 (RESERVE_BUY/WATCH_ONLY)")
+        watch.to_csv(OUTPUT_FILE, index=False, encoding="utf-8-sig")
+        return
+
+    results = []
+    for _, row in watch.iterrows():
+        n, flags, grade = evaluate_flags(row)
+        results.append({**row.to_dict(), "flag_count": n,
+                        "flags": flags, "rerating_grade": grade})
+
+    out = pd.DataFrame(results)
+    out = out[out["rerating_grade"] != "-"].sort_values(
+        ["rerating_grade", "total_score"], ascending=[True, False]
     )
-    base = pd.concat([base, eval_result], axis=1)
+    out.to_csv(OUTPUT_FILE, index=False, encoding="utf-8-sig")
 
-    watch = (
-        base[base["rerating_grade"] != "-"]
-          .sort_values(["flags_met", "total_score"], ascending=[False, False])
-          .reset_index(drop=True)
-    )
-    watch["date"] = TODAY
-
-    out_cols = [
-        "ticker", "name", "rerating_grade", "flags_met", "flag_detail",
-        "total_score", "news_score", "vol_ratio", "rsi", "ma_align",
-        "intraday_pct", "momentum_5d", "consec_up",
-        "article_count", "top_tags", "judge", "investor_score",
-        "fetch_date", "date"
-    ]
-    out_cols = [c for c in out_cols if c in watch.columns]
-    watch    = watch[out_cols]
-
-    os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
-    watch.to_csv(OUTPUT_FILE, index=False, encoding="utf-8-sig")
-
-    print(f"\n{'─'*55}")
-    print(f"[DONE] 저장: {len(watch)}종목 → {OUTPUT_FILE}")
-    print(f"\n[ 등급별 집계 ]")
-    grade_counts = watch["rerating_grade"].value_counts()
-    for g in ["STRONG", "WATCH", "MONITOR"]:
-        cnt = grade_counts.get(g, 0)
-        print(f"  {g:8s}: {cnt:3d}  {'█' * min(cnt, 30)}")
-
-    print(f"\n[ STRONG 종목 TOP 10 ]")
-    strong = watch[watch["rerating_grade"] == "STRONG"].head(10)
-    if strong.empty:
-        print("  없음")
-    else:
-        print(strong[["ticker", "name", "total_score",
-                       "news_score", "vol_ratio", "flag_detail"]].to_string(index=False))
-
-    print(f"\n[ WATCH 종목 TOP 10 ]")
-    w_top = watch[watch["rerating_grade"] == "WATCH"].head(10)
-    if w_top.empty:
-        print("  없음")
-    else:
-        print(w_top[["ticker", "name", "total_score",
-                      "flag_detail"]].to_string(index=False))
-    print(f"{'─'*55}\n")
+    strong    = (out["rerating_grade"] == "STRONG").sum()
+    watch_cnt = (out["rerating_grade"] == "WATCH").sum()
+    monitor   = (out["rerating_grade"] == "MONITOR").sum()
+    print(f"\n[결과] STRONG={strong} / WATCH={watch_cnt} / MONITOR={monitor}")
+    print(f"✅ 저장: {OUTPUT_FILE}")
 
 
 if __name__ == "__main__":
