@@ -1,0 +1,148 @@
+{
+  "_meta": {
+    "generated_at": "2026-05-30 12:34:04",
+    "source": "kiwoom_rest_api_ka01690",
+    "account_no": "64988566",
+    "env": "real",
+    "version": "1.3",
+    "grade_legend": {
+      "A": "핵심 중장기 | -15% 트리거 | 피라미딩 1:2:3:4",
+      "B": "소액/불확실 | -25% 트리거 | 균등 소액 1:1",
+      "C": "거미줄 비활성 | 방치"
+    }
+  },
+  "holdings": [
+    {
+      "ticker": "006260",
+      "name": "LS",
+      "qty": 3,
+      "avg_price": 538667.0,
+      "current_price": 446000.0,
+      "prft_rt": -17.4,
+      "grade": "A",
+      "reason": "전선/전력 중장기 테마, DB증권 목표가 60만원",
+      "trigger_pct": -15.0,
+      "trigger_price": 457867,
+      "current_step": 1,
+      "max_steps": 4,
+      "step_qty_ratio": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "catastrophic_only": true,
+      "active": true,
+      "alert_price": 380000,
+      "alert_memo": "LS 38만원 추가매수 대기",
+      "sfd_signal": "WATCH_ONLY"
+    },
+    {
+      "ticker": "034020",
+      "name": "두산에너빌리티",
+      "qty": 3,
+      "avg_price": 114300.0,
+      "current_price": 105600.0,
+      "prft_rt": -7.82,
+      "grade": "A",
+      "reason": "원전 중장기 모멘텀",
+      "trigger_pct": -15.0,
+      "trigger_price": 97155,
+      "current_step": 1,
+      "max_steps": 4,
+      "step_qty_ratio": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "catastrophic_only": true,
+      "active": true,
+      "sfd_signal": "HOLD"
+    },
+    {
+      "ticker": "052690",
+      "name": "한전기술",
+      "qty": 2,
+      "avg_price": 164700.0,
+      "current_price": 134300.0,
+      "prft_rt": -18.64,
+      "grade": "A",
+      "reason": "원전 설계 독점",
+      "trigger_pct": -15.0,
+      "trigger_price": 139995,
+      "current_step": 1,
+      "max_steps": 4,
+      "step_qty_ratio": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "catastrophic_only": true,
+      "active": true,
+      "sfd_signal": "HOLD"
+    },
+    {
+      "ticker": "005930",
+      "name": "삼성전자",
+      "qty": 1,
+      "avg_price": 299500.0,
+      "current_price": 317000.0,
+      "prft_rt": 5.61,
+      "grade": "C",
+      "reason": "지수 추종, 거미줄 불필요",
+      "trigger_pct": null,
+      "trigger_price": null,
+      "current_step": 1,
+      "max_steps": 0,
+      "step_qty_ratio": [],
+      "catastrophic_only": true,
+      "active": false,
+      "sfd_signal": "HOLD"
+    },
+    {
+      "ticker": "001440",
+      "name": "대한전선",
+      "qty": 1,
+      "avg_price": 55900.0,
+      "current_price": 45450.0,
+      "prft_rt": -18.86,
+      "grade": "B",
+      "reason": "전선 테마이나 모멘텀 확인 필요",
+      "trigger_pct": -25.0,
+      "trigger_price": 41925,
+      "current_step": 1,
+      "max_steps": 2,
+      "step_qty_ratio": [
+        1,
+        1
+      ],
+      "catastrophic_only": true,
+      "active": true,
+      "sfd_signal": "HOLD"
+    },
+    {
+      "ticker": "171120",
+      "name": "라이온켐텍",
+      "qty": 16,
+      "avg_price": 2703.0,
+      "current_price": 2160.0,
+      "prft_rt": -20.26,
+      "grade": "B",
+      "reason": "소액 보유, 모멘텀 불확실 → 방치 우선, -25% 시 소액 평단 낮추기",
+      "trigger_pct": -25.0,
+      "trigger_price": 2027,
+      "current_step": 1,
+      "max_steps": 2,
+      "step_qty_ratio": [
+        1,
+        1
+      ],
+      "catastrophic_only": true,
+      "active": true,
+      "sfd_signal": "HOLD"
+    }
+  ],
+  "_last_updated": "2026-05-30"
+}
