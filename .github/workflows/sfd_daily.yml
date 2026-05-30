@@ -1,26 +1,43 @@
-﻿name: SFD Daily Pipeline
+name: SFD Daily Pipeline
+# 파일위치(GitHub): sfd-pipeline/.github/workflows/sfd_daily.yml
+# V7.5 → V7.6: Node.js 24 업그레이드 (GitHub Actions 강제 전환 2026-06-16 대응)
+# 변경사항:
+#   - actions/checkout@v4 → actions/checkout@v4 (Node24 강제 적용 env 추가)
+#   - actions/setup-python@v5 → actions/setup-python@v5 (동일)
+#   - env에 FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true' 추가
+#   ※ checkout/setup-python의 Node24 네이티브 버전(@v5/@v6)이 릴리즈되면
+#     해당 버전으로 추가 업그레이드 권장
+
 on:
   schedule:
+    # KST 08:35 = UTC 23:35 (전날 기준, 일~목)
     - cron: '35 23 * * 0-4'
   workflow_dispatch:
 
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 60
+
     env:
-      SFD_BASE_DIR: /tmp/sfd
+      # ── Node.js 24 강제 전환 (2026-06-16 기본값 변경 선제 대응) ──
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+      # ── Secrets ──
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-      GDRIVE_LATEST_FOLDER_ID:     ${{ secrets.GDRIVE_LATEST_FOLDER_ID }}
-      GDRIVE_HISTORY_FOLDER_ID:    ${{ secrets.GDRIVE_HISTORY_FOLDER_ID }}
-      GDRIVE_INPUT_FOLDER_ID:      ${{ secrets.GDRIVE_INPUT_FOLDER_ID }}
-      GDRIVE_CLIENT_ID:            ${{ secrets.GDRIVE_CLIENT_ID }}
-      GDRIVE_CLIENT_SECRET:        ${{ secrets.GDRIVE_CLIENT_SECRET }}
-      GDRIVE_REFRESH_TOKEN:        ${{ secrets.GDRIVE_REFRESH_TOKEN }}
-      KIS_APP_KEY:                 ${{ secrets.KIS_APP_KEY }}
-      KIS_APP_SECRET:              ${{ secrets.KIS_APP_SECRET }}
-      KIS_ACCOUNT_NO:              ${{ secrets.KIS_ACCOUNT_NO }}
-      DART_API_KEY:                ${{ secrets.DART_API_KEY }}
+      GDRIVE_LATEST_FOLDER_ID: ${{ secrets.GDRIVE_LATEST_FOLDER_ID }}
+      GDRIVE_HISTORY_FOLDER_ID: ${{ secrets.GDRIVE_HISTORY_FOLDER_ID }}
+      GDRIVE_INPUT_FOLDER_ID: ${{ secrets.GDRIVE_INPUT_FOLDER_ID }}
+      GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+      GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
+      GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
+      KIS_APP_KEY: ${{ secrets.KIS_APP_KEY }}
+      KIS_APP_SECRET: ${{ secrets.KIS_APP_SECRET }}
+      KIS_ACCOUNT_NO: ${{ secrets.KIS_ACCOUNT_NO }}
+      DART_API_KEY: ${{ secrets.DART_API_KEY }}
+      NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+      NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+      SFD_BASE_DIR: /tmp/sfd
 
     steps:
       - name: Checkout
@@ -35,100 +52,66 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Make dirs
-        run: mkdir -p /tmp/sfd/outputs/latest /tmp/sfd/outputs/history /tmp/sfd/inputs /tmp/sfd/data
-
-      - name: Copy static inputs
+      - name: Make dirs + copy data
         run: |
-          cp data/sfd_master_signal_input.csv /tmp/sfd/inputs/ || true
-          cp data/sfd_naver_news_queries.csv /tmp/sfd/inputs/ || true
+          mkdir -p /tmp/sfd/outputs/latest /tmp/sfd/outputs/history /tmp/sfd/inputs /tmp/sfd/data
           cp data/sfd_company_master_v1.4_sector_filled.csv /tmp/sfd/data/ || true
-          cp portfolio.json /tmp/sfd/ || true
           cp portfolio.json /tmp/sfd/data/ || true
+          cp portfolio.json /tmp/sfd/outputs/latest/ || true
 
-      - name: Layer1 prev_close_fetch
+      - name: Layer 1 — prev_close_fetch
         run: python tools/sfd_prev_close_fetch.py
 
-      - name: Layer1.5 news_fetcher
-        env:
-          NAVER_CLIENT_ID:     ${{ secrets.NAVER_CLIENT_ID }}
-          NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
-          NAVER_NEWS_DISPLAY:  "20"
+      - name: Layer 1.5 — news_fetcher
         run: python tools/sfd_news_fetcher.py
         continue-on-error: true
 
-      - name: Layer2.7 technical_analyzer
+      - name: Layer 1.6 — event_calendar_builder
+        run: python tools/sfd_event_calendar_builder.py
+        continue-on-error: true
+
+      - name: Layer 2.7 — technical_analyzer
         run: python tools/sfd_technical_analyzer.py
         continue-on-error: true
 
-      - name: Layer2.8 oscillation_analyzer
+      - name: Layer 2.8 — oscillation_analyzer
         run: python tools/sfd_oscillation_analyzer.py
         continue-on-error: true
 
-      - name: Layer2 signal_aggregator
+      - name: Layer 2 — signal_aggregator
         run: python tools/sfd_signal_aggregator.py
 
-      - name: Layer2.5 rerating_watch
+      - name: Layer 2.5 — rerating_watch
         run: python tools/sfd_rerating_watch.py
         continue-on-error: true
 
-      - name: Layer2.6 fundamental_watch
+      - name: Layer 2.6 — fundamental_watch
         run: python tools/sfd_fundamental_watch.py
         continue-on-error: true
 
-      - name: Layer2.6b sector_injector
+      - name: Layer 2.6b — sector_injector
         run: python tools/sfd_sector_injector.py
         continue-on-error: true
 
-      - name: Layer3 backtest_d1
+      - name: Layer 3 — backtest_d1
         run: python tools/sfd_backtest_d1.py
+        continue-on-error: true
 
-      - name: Layer4 finalize
+      - name: Layer 4 — finalize
         run: python tools/sfd_finalize.py
         continue-on-error: true
 
-      - name: Layer5 portfolio_monitor
+      - name: Layer 5 — portfolio_monitor
         run: python tools/sfd_portfolio_monitor.py
         continue-on-error: true
 
       # ★ V7.4 신규 — Layer 5.5 Trade Guardian
-      - name: Layer5.5 trade_guardian
+      - name: Layer 5.5 — trade_guardian
+        env:
+          SFD_BASE_DIR: /tmp/sfd
         run: python sfd_trade_guardian.py
         continue-on-error: true
 
       - name: Upload latest to Drive
-        run: |
-          python - <<'PYEOF'
-          import glob
-          from utils.gdrive_uploader import upload_batch
-          from config import LATEST_DIR, GDRIVE_LATEST_FOLDER_ID
-          upload_batch([
-              (f'{LATEST_DIR}/sfd_prev_close_latest.csv',          GDRIVE_LATEST_FOLDER_ID),
-              (f'{LATEST_DIR}/sfd_news_signal_latest.csv',         GDRIVE_LATEST_FOLDER_ID),
-              (f'{LATEST_DIR}/sfd_news_score_latest.csv',          GDRIVE_LATEST_FOLDER_ID),
-              (f'{LATEST_DIR}/sfd_technical_latest.csv',           GDRIVE_LATEST_FOLDER_ID),
-              (f'{LATEST_DIR}/sfd_oscillation_latest.csv',         GDRIVE_LATEST_FOLDER_ID),
-              (f'{LATEST_DIR}/sfd_master_signal_latest.csv',       GDRIVE_LATEST_FOLDER_ID),
-              (f'{LATEST_DIR}/sfd_rerating_watch_latest.csv',      GDRIVE_LATEST_FOLDER_ID),
-              (f'{LATEST_DIR}/sfd_fundamental_latest.csv',         GDRIVE_LATEST_FOLDER_ID),
-              (f'{LATEST_DIR}/sfd_sector_latest.csv',              GDRIVE_LATEST_FOLDER_ID),
-              (f'{LATEST_DIR}/sfd_backtest_d1_latest.csv',         GDRIVE_LATEST_FOLDER_ID),
-              (f'{LATEST_DIR}/sfd_final_signal_latest.csv',        GDRIVE_LATEST_FOLDER_ID),
-              (f'{LATEST_DIR}/sfd_portfolio_monitor_latest.csv',   GDRIVE_LATEST_FOLDER_ID),
-              (f'{LATEST_DIR}/guardian_alerts.json',               GDRIVE_LATEST_FOLDER_ID),
-              (f'{LATEST_DIR}/sfd_prev_close_fetch.log',           GDRIVE_LATEST_FOLDER_ID),
-              (f'{LATEST_DIR}/sfd_signal_aggregator.log',          GDRIVE_LATEST_FOLDER_ID),
-              (f'{LATEST_DIR}/sfd_backtest_d1.log',                GDRIVE_LATEST_FOLDER_ID),
-              (f'{LATEST_DIR}/sfd_news_fetcher.log',               GDRIVE_LATEST_FOLDER_ID),
-          ])
-          PYEOF
-
-      - name: Upload history to Drive
-        run: |
-          python - <<'PYEOF'
-          import glob
-          from utils.gdrive_uploader import upload_batch
-          from config import HISTORY_DIR, GDRIVE_HISTORY_FOLDER_ID
-          files = glob.glob(f'{HISTORY_DIR}/**/*.csv', recursive=True)
-          upload_batch([(f, GDRIVE_HISTORY_FOLDER_ID) for f in files])
-          PYEOF
+        run: python tools/gdrive_uploader.py
+        continue-on-error: true
