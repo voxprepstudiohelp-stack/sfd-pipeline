@@ -129,7 +129,7 @@ def evaluate_flags(row: pd.Series):
     if pd.notna(row.get("vol_ratio")) and row["vol_ratio"] >= TH["vol_ratio_min"]:
         flags.append(f"VOL>={TH['vol_ratio_min']}x")
     rsi_ok      = pd.notna(row.get("rsi"))      and float(row["rsi"])      >= TH["rsi_min"]
-    ma_align_ok = pd.notna(row.get("ma_align")) and int(row["ma_align"]) >= TH["ma_align_min"]
+    ma_align_ok = pd.notna(row.get("ma_align")) and str(row["ma_align"]).strip() not in ("", "0", "nan")
     if rsi_ok or ma_align_ok:
         flags.append(f"RSI>={TH['rsi_min']}" if rsi_ok else f"MA_ALIGN>={TH['ma_align_min']}")
 
@@ -212,4 +212,5 @@ def build_rerating_watch():
 
 if __name__ == "__main__":
     build_rerating_watch()
+
 

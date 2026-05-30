@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 sfd_portfolio_monitor.py — Layer 5  v1.0
@@ -34,6 +34,7 @@ SFD 포트폴리오 모니터 + 거미줄 매매 단계 추적
 import json
 import sys
 from datetime import datetime
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -42,8 +43,9 @@ import pandas as pd
 # 경로 설정
 # ============================
 _HERE          = Path(__file__).resolve().parent
-_PIPELINE_ROOT = _HERE.parent
+_PIPELINE_ROOT = Path(os.environ.get("SFD_BASE_DIR", str(_HERE.parent)))
 _LATEST        = _PIPELINE_ROOT / "outputs" / "latest"
+_LATEST.mkdir(parents=True, exist_ok=True)
 
 PORTFOLIO_FILE   = _PIPELINE_ROOT / "portfolio.json"
 CLOSE_FILE       = _LATEST / "sfd_prev_close_latest.csv"
@@ -318,3 +320,6 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+
