@@ -1,6 +1,11 @@
 name: SFD Daily Pipeline
 # 파일위치(GitHub): sfd-pipeline/.github/workflows/sfd_daily.yml
-# V7.8.2 -> V7.8.3: timeout-minutes 120
+# V8.0 -> V8.1: Node.js 24 네이티브 업그레이드
+# [변경사항]
+#   - actions/checkout@v4  -> actions/checkout@v6  (Node24 네이티브)
+#   - actions/setup-python@v5 -> actions/setup-python@v6 (Node24 네이티브)
+#   - FORCE_JAVASCRIPT_ACTIONS_TO_NODE24 env 제거 (네이티브 버전으로 불필요)
+# [이전 커밋 기준] 41eb505 (main, V8.0)
 
 on:
   schedule:
@@ -14,7 +19,7 @@ jobs:
     timeout-minutes: 120
 
     env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+      # ── Secrets ──
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
       GDRIVE_LATEST_FOLDER_ID: ${{ secrets.GDRIVE_LATEST_FOLDER_ID }}
       GDRIVE_HISTORY_FOLDER_ID: ${{ secrets.GDRIVE_HISTORY_FOLDER_ID }}
@@ -32,10 +37,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -57,7 +62,7 @@ jobs:
 
       - name: Make signal_input from prev_close
         run: |
-          cp /tmp/sfd/outputs/latest/sfd_prev_close_latest.csv \
+          cp /tmp/sfd/inputs/sfd_prev_close_input.csv \
              /tmp/sfd/inputs/sfd_master_signal_input.csv || true
           echo "[OK] sfd_master_signal_input.csv 생성 완료"
           ls -la /tmp/sfd/inputs/
