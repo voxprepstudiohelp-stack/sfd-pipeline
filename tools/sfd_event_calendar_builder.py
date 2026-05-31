@@ -1,258 +1,339 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-sfd_event_calendar_builder.py  v1.0
-SFD Pipeline — Layer 1.6 (Event Calendar)
-Schedule : 매주 일요일 22:00 KST  (GitHub Actions: sfd-event-calendar.yml)
-Author   : Claude (Anthropic) — SFD Main Architect
-Date     : 2026-05-22
+sfd_event_calendar_builder.py — Layer 1.6  v2.1
+DART 공시 기반 이벤트 캘린더 + BM-5 Volatility Buffer
+
+변경사항 (v2.0 → v2.1):
+  [BM-5] Volatility Buffer 추가
+    - event_time      : 공시 접수 시각 (HHmm → HH:MM 포맷)
+    - no_trade_start  : 이벤트 시각 - 60분
+    - no_trade_end    : 이벤트 시각 + 60분
+    - is_no_trade_now : 현재 KST 시각이 no_trade 구간 내이면 True
+  [출력] sfd_no_trade_tickers.json 추가
+    - 현재 시각 기준 No-Trade 대상 ticker 목록
+    - trade_guardian / signal_aggregator에서 참조
+
+입출력:
+  IN  : DART OpenAPI (공시 목록)
+  OUT : outputs/latest/sfd_event_calendar.csv
+  OUT : outputs/latest/sfd_event_summary.json
+  OUT : outputs/latest/sfd_no_trade_tickers.json  ← BM-5 신규
+
+버전: v2.1
+작성: Claude Sonnet 4.6 (2026-05-31)
 """
 
+import json
 import os
-import requests
+import sys
+import time
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
 import pandas as pd
-from datetime import date, timedelta
-import calendar as cal_mod
+import requests
+from dotenv import load_dotenv
 
-# ──────────────────────────────────────────
+# ======================================
 # 경로 설정
-# ──────────────────────────────────────────
-OUTPUT_PATH   = "outputs/latest/sfd_event_calendar_latest.csv"
-BASE_CSV_PATH = "data/sfd_event_calendar_base.csv"
+# ======================================
+_HERE           = Path(__file__).resolve().parent
+_PIPELINE_ROOT  = _HERE.parent
+_LATEST         = _PIPELINE_ROOT / "outputs" / "latest"
 
-# ──────────────────────────────────────────
-# 환경변수
-# ──────────────────────────────────────────
-FMP_API_KEY = os.environ.get("FMP_API_KEY", "")
-FETCH_WEEKS = 10  # 오늘 기준 10주치 수집
+EVENT_OUT       = _LATEST / "sfd_event_calendar.csv"
+SUMMARY_OUT     = _LATEST / "sfd_event_summary.json"
+NO_TRADE_OUT    = _LATEST / "sfd_no_trade_tickers.json"   # BM-5 신규
 
-# ──────────────────────────────────────────
-# 매핑 테이블
-# ──────────────────────────────────────────
-IMPACT_SCORE_MAP = {
-    "High":   -7,
-    "Medium": -4,
-    "Low":    -2,
-    "None":    0,
-}
+load_dotenv(_PIPELINE_ROOT / ".env")
+DART_API_KEY = os.getenv("DART_API_KEY", "")
 
-D_MINUS_MAP = {
-    "High":   2,
-    "Medium": 1,
-    "Low":    0,
-}
+DART_BASE = "https://opendart.fss.or.kr/api"
 
-DIRECTION_KEYWORDS = {
-    "RISK_OFF": [
-        "fomc", "rate decision", "cpi", "pce", "ppi",
-        "unemployment", "기준금리", "금리결정", "물가",
-    ],
-    "RISK_ON": [
-        "nfp", "nonfarm", "gdp", "retail sales", "ism manufacturing",
-        "무역수지", "수출",
-    ],
-}
+# BM-5: No-Trade 버퍼 (분)
+NO_TRADE_BUFFER_MIN = 60
 
-def get_direction(event_name: str) -> str:
-    name_lower = event_name.lower()
-    for direction, keywords in DIRECTION_KEYWORDS.items():
-        if any(kw in name_lower for kw in keywords):
-            return direction
-    return "NEUTRAL"
+KST = ZoneInfo("Asia/Seoul")
 
-# ──────────────────────────────────────────
-# [1] FMP API — 미국·한국 매크로 이벤트
-# ──────────────────────────────────────────
-def fetch_fmp_events() -> list[dict]:
-    if not FMP_API_KEY:
-        print("[WARN] FMP_API_KEY 미설정 → FMP 수집 스킵")
+# ======================================
+# 이벤트 분류 규칙
+# ======================================
+EVENT_RULES = [
+    # (키워드, 등급, 이벤트명, 영향 설명)
+    ("유상증자",        "HIGH",  "유상증자",        "+30% 수급영향 리스크"),
+    ("무상증자",        "HIGH",  "무상증자",        "+30% 수급영향 리스크"),
+    ("주주총회소집공고", "HIGH",  "주주총회",        "의결권 행사"),
+    ("자기주식취득결정", "HIGH",  "자사주취득결정",  "의결권 행사"),
+    ("영업(잠정)실적",  "HIGH",  "잠정실적",        "의결권 행사"),
+    ("주요사항보고서제출기한",  "HIGH",  "주요사항보고서",  "10%↑ 의결권"),
+    ("합병결정",        "HIGH",  "합병결정",        "급등락 급등 이상"),
+    ("분할",            "HIGH",  "분할공시",        "시장 or 자산 이상"),
+    ("상품판매중단",    "MID",   "상품판매중단",    "섹터 이상 업데이트"),
+    ("주식교환",        "MID",   "주식교환",        "잠재 or 손실 공시"),
+    ("CB발행",          "MID",   "CB발행",          "주가 희석 업데이트"),
+    ("신주인수권",      "MID",   "신주인수권",      "확인 이후 대응"),
+    ("단기차입",        "MID",   "단기차입공시",    "재무구조 업데이트"),
+    ("증자",            "MID",   "증자공시",        "재무구조 업데이트"),
+    ("자본감소",        "MID",   "자본감소공시",    "손익 재공시"),
+    ("배당",            "LOW",   "배당공시",        "주가 영향 낮음"),
+    ("정정",            "LOW",   "정정공시",        "기존 공시 정정"),
+]
+
+GRADE_SCORE = {"HIGH": 30, "MID": 15, "LOW": 5}
+
+
+# ======================================
+# DART API 수집
+# ======================================
+def fetch_dart_list(bgn_de: str, end_de: str) -> list:
+    """공시 목록 조회 (최대 100건/페이지)"""
+    if not DART_API_KEY:
+        print("[Layer1.6] ERROR: DART_API_KEY 환경변수 없음 → .env 확인")
         return []
 
-    today    = date.today()
-    end_date = today + timedelta(weeks=FETCH_WEEKS)
-    url = (
-        f"https://financialmodelingprep.com/api/v3/economic_calendar"
-        f"?from={today.isoformat()}&to={end_date.isoformat()}"
-        f"&apikey={FMP_API_KEY}"
-    )
+    all_items = []
+    page = 1
 
+    while True:
+        params = {
+            "crtfc_key":  DART_API_KEY,
+            "bgn_de":     bgn_de,
+            "end_de":     end_de,
+            "page_no":    page,
+            "page_count": 100,
+        }
+        try:
+            resp = requests.get(f"{DART_BASE}/list.json", params=params, timeout=10)
+            data = resp.json()
+        except Exception as e:
+            print(f"[Layer1.6] DART API 실패: {e}")
+            break
+
+        if data.get("status") != "000":
+            print(f"[Layer1.6] DART 응답 오류: {data.get('message', '')}")
+            break
+
+        items = data.get("list", [])
+        all_items.extend(items)
+
+        total = int(data.get("total_count", 0))
+        if page * 100 >= total:
+            break
+        page += 1
+        time.sleep(0.3)
+
+    print(f"[Layer1.6] DART 수집 완료: {len(all_items)}건 ({bgn_de}~{end_de})")
+    return all_items
+
+
+# ======================================
+# 이벤트 분류
+# ======================================
+def classify_disclosure(report_nm: str) -> tuple:
+    """공시명 → (등급, 이벤트명, 영향) or None"""
+    for keyword, grade, event_name, impact in EVENT_RULES:
+        if keyword in report_nm:
+            return grade, event_name, impact
+    return None, None, None
+
+
+# ======================================
+# BM-5: No-Trade 구간 계산
+# ======================================
+def calc_no_trade_window(rcept_dt: str, rcept_time: str = "") -> tuple:
+    """
+    공시 접수일시 → no_trade_start / no_trade_end (KST)
+    rcept_dt  : YYYYMMDD
+    rcept_time: HHMM (DART API에서 제공하는 경우)
+    DART list API는 시분 미제공 → 09:00 기본값 사용
+    """
     try:
-        resp = requests.get(url, timeout=15)
-        resp.raise_for_status()
-        raw = resp.json()
-    except Exception as e:
-        print(f"[ERROR] FMP API 호출 실패: {e}")
-        return []
+        hhmm = rcept_time.strip() if rcept_time else "0900"
+        if len(hhmm) == 4:
+            hh, mm = int(hhmm[:2]), int(hhmm[2:])
+        else:
+            hh, mm = 9, 0
 
-    events = []
-    for item in raw:
-        country = (item.get("country") or "").upper()
-        if country not in ("US", "KR"):
-            continue
+        event_dt = datetime(
+            int(rcept_dt[:4]), int(rcept_dt[4:6]), int(rcept_dt[6:8]),
+            hh, mm, tzinfo=KST
+        )
+        no_trade_start = event_dt - timedelta(minutes=NO_TRADE_BUFFER_MIN)
+        no_trade_end   = event_dt + timedelta(minutes=NO_TRADE_BUFFER_MIN)
 
-        impact = item.get("impact", "None") or "None"
-        if impact == "None":
-            continue  # 임팩트 없는 이벤트 필터링
-
-        ev_name = (item.get("event") or "").strip()
-        ev_date = (item.get("date") or "")[:10]  # YYYY-MM-DD
-
-        if not ev_name or not ev_date:
-            continue
-
-        events.append({
-            "event_date":      ev_date,
-            "event_type":      "MACRO_US" if country == "US" else "MACRO_KR",
-            "event_name":      ev_name,
-            "market":          country,
-            "impact_dir":      get_direction(ev_name),
-            "impact_score":    IMPACT_SCORE_MAP.get(impact, -2),
-            "d_minus_signal":  D_MINUS_MAP.get(impact, 1),
-            "source":          "FMP_API",
-            "notes":           f"FMP_impact={impact}",
-        })
-
-    print(f"[OK] FMP 이벤트 수집: {len(events)}건")
-    return events
+        return (
+            event_dt.strftime("%H:%M"),
+            no_trade_start.strftime("%H:%M"),
+            no_trade_end.strftime("%H:%M"),
+        )
+    except Exception:
+        return "09:00", "08:00", "10:00"
 
 
-# ──────────────────────────────────────────
-# [2] KRX 자동계산 — 월간 옵션만기
-#     매월 2번째 목요일 (단, 쿼드러플 월 제외)
-# ──────────────────────────────────────────
-def get_monthly_option_expiry(year: int) -> list[dict]:
-    events = []
-    quad_months = {3, 6, 9, 12}
-
-    for month in range(1, 13):
-        if month in quad_months:
-            continue  # 쿼드러플 위칭에서 처리
-
-        month_cal = cal_mod.monthcalendar(year, month)
-        thursdays = [week[3] for week in month_cal if week[3] != 0]
-        if len(thursdays) < 2:
-            continue
-
-        expiry_day = thursdays[1]
-        events.append({
-            "event_date":      date(year, month, expiry_day).isoformat(),
-            "event_type":      "DERIVATIVE",
-            "event_name":      "KOSPI200 옵션만기",
-            "market":          "KR",
-            "impact_dir":      "NEUTRAL",
-            "impact_score":    -3,
-            "d_minus_signal":  1,
-            "source":          "AUTO_KRX",
-            "notes":           "수급 변동성 주의",
-        })
-    return events
-
-
-# ──────────────────────────────────────────
-# [3] KRX 자동계산 — 쿼드러플 위칭
-#     3/6/9/12월 2번째 목요일
-# ──────────────────────────────────────────
-def get_quadruple_witching(year: int) -> list[dict]:
-    events = []
-    for month in [3, 6, 9, 12]:
-        month_cal = cal_mod.monthcalendar(year, month)
-        thursdays = [week[3] for week in month_cal if week[3] != 0]
-        if len(thursdays) < 2:
-            continue
-
-        expiry_day = thursdays[1]
-        events.append({
-            "event_date":      date(year, month, expiry_day).isoformat(),
-            "event_type":      "DERIVATIVE",
-            "event_name":      "네 마녀의 날 (쿼드러플 위칭)",
-            "market":          "KR",
-            "impact_dir":      "NEUTRAL",
-            "impact_score":    -5,
-            "d_minus_signal":  2,
-            "source":          "AUTO_KRX",
-            "notes":           "선물+옵션+ETF+주식선물 동시만기 / 변동성 최대",
-        })
-    return events
-
-
-# ──────────────────────────────────────────
-# [4] base CSV 로드 — 수동 등록 이벤트
-#     (BOK 금통위, 지정학, 실적시즌 등)
-# ──────────────────────────────────────────
-def load_base_events() -> list[dict]:
+def is_in_no_trade_window(rcept_dt: str, no_trade_start: str, no_trade_end: str) -> bool:
+    """현재 KST 시각이 no_trade 구간 내인지 확인"""
     try:
-        df = pd.read_csv(BASE_CSV_PATH, encoding="utf-8-sig")
-        # event_date를 문자열로 통일
-        df["event_date"] = pd.to_datetime(df["event_date"]).dt.strftime("%Y-%m-%d")
-        print(f"[OK] base CSV 로드: {len(df)}건")
-        return df.to_dict("records")
-    except FileNotFoundError:
-        print(f"[WARN] base CSV 없음 ({BASE_CSV_PATH}) → 스킵")
-        return []
-    except Exception as e:
-        print(f"[ERROR] base CSV 로드 실패: {e}")
-        return []
+        now = datetime.now(KST)
+        today_str = now.strftime("%Y%m%d")
+
+        # 오늘 공시만 No-Trade 적용
+        if rcept_dt != today_str:
+            return False
+
+        def to_dt(hhmm_str):
+            h, m = map(int, hhmm_str.split(":"))
+            return now.replace(hour=h, minute=m, second=0, microsecond=0)
+
+        return to_dt(no_trade_start) <= now <= to_dt(no_trade_end)
+    except Exception:
+        return False
 
 
-# ──────────────────────────────────────────
-# 메인 빌더
-# ──────────────────────────────────────────
-def build_calendar():
-    today = date.today()
-    year  = today.year
+# ======================================
+# 메인
+# ======================================
+def main():
+    today     = date.today()
+    yesterday = today - timedelta(days=1)
 
-    print(f"\n{'='*50}")
-    print(f"SFD Event Calendar Builder v1.0")
-    print(f"실행일: {today.isoformat()}  |  수집범위: {FETCH_WEEKS}주")
-    print(f"{'='*50}\n")
+    # 월요일 보정: 토~일 공시 포함
+    if today.weekday() == 0:
+        yesterday = today - timedelta(days=3)
 
-    events = []
+    bgn_de = yesterday.strftime("%Y%m%d")
+    end_de = today.strftime("%Y%m%d")
 
-    # Step 1. FMP API (US + KR 매크로)
-    events += fetch_fmp_events()
+    print(f"[Layer1.6] sfd_event_calendar_builder v2.1 시작 | {bgn_de}~{end_de}")
 
-    # Step 2. KRX 파생상품 만기 (올해 + 내년)
-    for y in [year, year + 1]:
-        events += get_monthly_option_expiry(y)
-        events += get_quadruple_witching(y)
-    print(f"[OK] KRX 파생만기 계산 완료")
+    if not DART_API_KEY:
+        print("[Layer1.6] WARN: DART_API_KEY 없음 → 빈 이벤트 캘린더 생성")
+        df_empty = pd.DataFrame(columns=[
+            "rcept_dt", "corp_name", "ticker", "report_nm",
+            "event_grade", "event_name", "event_impact", "event_score",
+            "event_time", "no_trade_start", "no_trade_end", "is_no_trade_now"
+        ])
+        df_empty.to_csv(EVENT_OUT, index=False, encoding="utf-8-sig")
+        summary = {"as_of_date": str(today), "total": 0, "HIGH": 0, "MID": 0, "LOW": 0, "events": []}
+        SUMMARY_OUT.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        no_trade = {"as_of_datetime": datetime.now(KST).isoformat(), "no_trade_tickers": []}
+        NO_TRADE_OUT.write_text(json.dumps(no_trade, ensure_ascii=False, indent=2), encoding="utf-8")
+        print("[Layer1.6] DART_API_KEY를 .env에 설정: DART_API_KEY=your_key")
+        print("           가입: https://opendart.fss.or.kr/")
+        return 0
 
-    # Step 3. 수동 base CSV
-    events += load_base_events()
+    # 공시 수집
+    items = fetch_dart_list(bgn_de, end_de)
 
-    if not events:
-        print("[FATAL] 수집된 이벤트 없음 — 종료")
-        return
+    # 이벤트 분류 + BM-5 no_trade 구간 계산
+    rows = []
+    for item in items:
+        report_nm = item.get("report_nm", "")
+        grade, event_name, impact = classify_disclosure(report_nm)
+        if grade is None:
+            continue
 
-    # Step 4. 정제 및 저장
-    df = (
-        pd.DataFrame(events)
-          .drop_duplicates(subset=["event_date", "event_name"])
-          .sort_values("event_date")
-          .reset_index(drop=True)
-    )
+        rcept_dt   = item.get("rcept_dt", "")
+        rcept_time = item.get("rcept_tm", "")  # DART list API: rcept_tm 필드 (없을 수도 있음)
 
-    # 과거 이벤트 제외 (오늘 이전 30일 이후만 유지)
-    cutoff = (today - timedelta(days=30)).isoformat()
-    df = df[df["event_date"] >= cutoff].reset_index(drop=True)
+        event_time, no_trade_start, no_trade_end = calc_no_trade_window(rcept_dt, rcept_time)
+        is_no_trade = is_in_no_trade_window(rcept_dt, no_trade_start, no_trade_end)
 
-    os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
-    df.to_csv(OUTPUT_PATH, index=False, encoding="utf-8-sig")
+        rows.append({
+            "rcept_dt":       rcept_dt,
+            "corp_name":      item.get("corp_name", ""),
+            "stock_code":     item.get("stock_code", "").zfill(6),
+            "report_nm":      report_nm,
+            "event_grade":    grade,
+            "event_name":     event_name,
+            "event_impact":   impact,
+            "event_score":    GRADE_SCORE[grade],
+            # BM-5 컬럼
+            "event_time":     event_time,
+            "no_trade_start": no_trade_start,
+            "no_trade_end":   no_trade_end,
+            "is_no_trade_now": is_no_trade,
+            # 참조용
+            "rcept_no":       item.get("rcept_no", ""),
+            "dart_url":       f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={item.get('rcept_no', '')}",
+        })
 
-    # ── 요약 리포트
-    print(f"\n{'─'*50}")
-    print(f"[DONE] 저장 완료: {len(df)}건 → {OUTPUT_PATH}")
-    print(f"\n[ 유형별 집계 ]")
-    print(df["event_type"].value_counts().to_string())
-    print(f"\n[ HIGH 임팩트 이벤트 (score ≤ -5) — 향후 30일 ]")
-    upcoming = df[
-        (df["impact_score"] <= -5) &
-        (df["event_date"] <= (today + timedelta(days=30)).isoformat())
-    ][["event_date", "event_name", "impact_score", "impact_dir"]]
-    if upcoming.empty:
-        print("  없음")
+    df = pd.DataFrame(rows) if rows else pd.DataFrame(columns=[
+        "rcept_dt", "corp_name", "stock_code", "report_nm",
+        "event_grade", "event_name", "event_impact", "event_score",
+        "event_time", "no_trade_start", "no_trade_end", "is_no_trade_now",
+        "rcept_no", "dart_url"
+    ])
+
+    # 등급순 정렬
+    grade_order = {"HIGH": 0, "MID": 1, "LOW": 2}
+    if not df.empty:
+        df["_order"] = df["event_grade"].map(grade_order)
+        df = df.sort_values(["_order", "rcept_dt"], ascending=[True, False])
+        df = df.drop(columns=["_order"])
+
+    _LATEST.mkdir(parents=True, exist_ok=True)
+    df.to_csv(EVENT_OUT, index=False, encoding="utf-8-sig")
+
+    # 요약 JSON
+    high_n = len(df[df["event_grade"] == "HIGH"]) if not df.empty else 0
+    mid_n  = len(df[df["event_grade"] == "MID"])  if not df.empty else 0
+    low_n  = len(df[df["event_grade"] == "LOW"])  if not df.empty else 0
+
+    summary = {
+        "as_of_date": str(today),
+        "period":     f"{bgn_de}~{end_de}",
+        "total":      len(df),
+        "HIGH":       high_n,
+        "MID":        mid_n,
+        "LOW":        low_n,
+        "events":     df[df["event_grade"] == "HIGH"].to_dict("records") if not df.empty else []
+    }
+    SUMMARY_OUT.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # BM-5: No-Trade ticker 목록 JSON
+    now_kst = datetime.now(KST)
+    if not df.empty and "is_no_trade_now" in df.columns:
+        no_trade_df = df[df["is_no_trade_now"] == True]
+        no_trade_tickers = no_trade_df["stock_code"].unique().tolist()
+        no_trade_details = no_trade_df[["stock_code", "corp_name", "event_name",
+                                         "no_trade_start", "no_trade_end"]].to_dict("records")
     else:
-        print(upcoming.to_string(index=False))
-    print(f"{'─'*50}\n")
+        no_trade_tickers = []
+        no_trade_details = []
+
+    no_trade_json = {
+        "as_of_datetime":   now_kst.isoformat(),
+        "buffer_minutes":   NO_TRADE_BUFFER_MIN,
+        "no_trade_count":   len(no_trade_tickers),
+        "no_trade_tickers": no_trade_tickers,
+        "details":          no_trade_details,
+    }
+    NO_TRADE_OUT.write_text(json.dumps(no_trade_json, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # 결과 출력
+    print(f"\n[Layer1.6] 이벤트 감지: 총 {len(df)}건 (HIGH={high_n} / MID={mid_n} / LOW={low_n})")
+    print(f"[Layer1.6] No-Trade 대상: {len(no_trade_tickers)}종목 (±{NO_TRADE_BUFFER_MIN}분 버퍼)")
+
+    if not df.empty:
+        for _, row in df[df["event_grade"] == "HIGH"].iterrows():
+            no_trade_flag = " ⛔ NO-TRADE" if row.get("is_no_trade_now") else ""
+            print(f"  🔴 HIGH | {row['corp_name']}({row['stock_code']}) "
+                  f"| {row['event_name']} | {row['event_time']}"
+                  f" [{row['no_trade_start']}~{row['no_trade_end']}]{no_trade_flag}")
+        if mid_n > 0:
+            print(f"  🟡 MID  | {mid_n}건 (sfd_event_calendar.csv 참조)")
+
+    if no_trade_tickers:
+        print(f"\n  ⛔ No-Trade 활성 종목: {no_trade_tickers}")
+
+    print(f"\n  → {EVENT_OUT}")
+    print(f"  → {SUMMARY_OUT}")
+    print(f"  → {NO_TRADE_OUT}")
+    print("[Layer1.6] 완료")
+    return 0
 
 
 if __name__ == "__main__":
-    build_calendar()
+    sys.exit(main())
