@@ -1,31 +1,27 @@
-# sfd_signal_aggregator.py | v2.6 | Claude (Anthropic) 2026-05-31
+# sfd_signal_aggregator.py | v2.7 | Claude (Anthropic) 2026-05-31
 # Deploy to: sfd-pipeline/sfd_signal_aggregator.py
 #
+# [v2.7 변경사항 ← v2.6]
+# - [BM-5] no_trade 연동
+#   sfd_no_trade_tickers.json 읽어서 해당 ticker → signal 강제 "NO_TRADE" 오버라이드
+#   total_score는 보존 (원래 신호 강도 기록 유지)
+#   no_trade_reason 컬럼 추가 (이유 명시)
+#   로그: [BM-5] no_trade 적용 건수 출력
+#
 # [v2.6 변경사항 ← v2.5]
-# - [BM-3]  bias_filter_score 추가
-#     허리라인 = (MA20 + MA60) / 2
-#     현재가 > 허리라인 × 1.05 → +5pt  (상단 바이어스)
-#     현재가 ±5% 이내          →  0pt  (중립)
-#     현재가 < 허리라인 × 0.95 → -5pt  (하단 패널티, 클램핑 없음)
-#     신규 출력 컬럼: bias_filter_score, waist_line, price_vs_waist_pct
-# - [BM-10] vol_surge_score (치량천) 반영
-#     load_tech_detail_map()에서 vol_surge_score 로드
-#     total_score에 vs_score 합산
-#     신규 출력 컬럼: vol_surge_score, vol_surge_label
+# - [BM-3]  bias_filter_score 로직
+# - [BM-10] vol_surge_score (치량천) 합산
 # - tech_total max: 75pt → 85pt (v1.3 기준)
 # - THRESHOLD: RESERVE=90 / WATCH=70 유지
 #
-# [스코어 합산 구조 v2.6]
+# [스코어 아키텍처 현황 v2.7]
 # total = tech(max85) + news(max30) + investor(max20)
 #       + theme(max10) + fund(max15) + bias_filter(±5) + vol_surge(0~10)
-#
-# [v2.5 유지 사항]
-# - pullback_zone_score L2.7 v1.2 패치 로직
-# - v2.2 fallback (L2.7 CSV 없을 때)
-# - THRESHOLD: RESERVE=90 / WATCH=70
+# NO_TRADE 오버라이드: total_score 보존, signal만 변경
 
 import os
 import sys
+import json
 import time
 import logging
 from datetime import datetime, timedelta
@@ -34,7 +30,7 @@ import pandas as pd
 import numpy as np
 import FinanceDataReader as fdr
 
-# ── 경로 설정 ─────────────────────────────────────────────────────────────────
+# ── 경로 설정 ────────────────────────────────────────────────────────────────
 _env_base = os.environ.get("SFD_BASE_DIR", "")
 if _env_base and os.path.isdir(_env_base):
     BASE_DIR = _env_base
@@ -57,6 +53,8 @@ INVESTOR_CSV     = os.path.join(LATEST_DIR, "sfd_investor_flow_latest.csv")
 NEWS_SCORE_CSV   = os.path.join(LATEST_DIR, "sfd_news_score_latest.csv")
 FUNDAMENTAL_CSV  = os.path.join(LATEST_DIR, "sfd_fundamental_latest.csv")
 TECH_DETAIL_CSV  = os.path.join(LATEST_DIR, "sfd_technical_latest.csv")
+# [BM-5] no_trade_tickers JSON
+NO_TRADE_JSON    = os.path.join(LATEST_DIR, "sfd_no_trade_tickers.json")
 
 logging.basicConfig(
     handlers=[
@@ -71,7 +69,7 @@ START_TIME = time.time()
 now        = datetime.now()
 fetch_time = now.strftime("%Y-%m-%d %H:%M:%S")
 
-# ── 파라미터 ──────────────────────────────────────────────────────────────────
+# ── 파라미터 ─────────────────────────────────────────────────────────────────
 RSI_PERIOD       = 14
 MA_SHORT         = 5
 MA_MID           = 20
@@ -85,15 +83,15 @@ THRESHOLD_WATCH   = 70
 MODE = "ORIGINAL"
 
 # [BM-3] Bias Filter 파라미터
-BIAS_MA_MID      = 20
-BIAS_MA_LONG     = 60
-BIAS_UPPER_PCT   = 1.05
-BIAS_LOWER_PCT   = 0.95
-BIAS_UPPER_PT    = 5
-BIAS_LOWER_PT    = -5
+BIAS_MA_MID     = 20
+BIAS_MA_LONG    = 60
+BIAS_UPPER_PCT  = 1.05
+BIAS_LOWER_PCT  = 0.95
+BIAS_UPPER_PT   = 5
+BIAS_LOWER_PT   = -5
 
 
-# ── 최근 거래일 탐색 ──────────────────────────────────────────────────────────
+# ── 최근 거래일 탐색 ─────────────────────────────────────────────────────────
 def find_recent_trade_date():
     for i in range(7):
         d = now - timedelta(days=i)
@@ -107,7 +105,7 @@ def find_recent_trade_date():
     return now.strftime("%Y%m%d")
 
 
-# ── v2.2 fallback 기술점수 함수 ───────────────────────────────────────────────
+# ── v2.2 fallback 기술 계산 ──────────────────────────────────────────────────
 def calc_rsi(series, period=14):
     delta    = series.diff()
     gain     = delta.clip(lower=0)
@@ -124,7 +122,7 @@ def get_technical_data(ticker, end_date):
         df    = fdr.DataReader(ticker, start, end.strftime("%Y-%m-%d"))
         if df is None or len(df) < MA_LONG: return None
         df = df.sort_index()
-        df["rsi"]           = calc_rsi(df["Close"], RSI_PERIOD)
+        df["rsi"]          = calc_rsi(df["Close"], RSI_PERIOD)
         df[f"ma{MA_SHORT}"] = df["Close"].rolling(MA_SHORT).mean()
         df[f"ma{MA_MID}"]   = df["Close"].rolling(MA_MID).mean()
         df[f"ma{MA_LONG}"]  = df["Close"].rolling(MA_LONG).mean()
@@ -137,12 +135,12 @@ def get_technical_data(ticker, end_date):
             "ma_long":   last[f"ma{MA_LONG}"],
             "volume":    last["Volume"],
             "vol_avg":   last["vol_avg"],
-            "close":     last["Close"],   # ★ BM-3용
+            "close":     last["Close"],
         }
     except: return None
 
 
-# ── 기본 점수 함수 ────────────────────────────────────────────────────────────
+# ── 스코어 함수들 ─────────────────────────────────────────────────────────────
 def score_rsi(rsi):
     if rsi is None: return 0
     if rsi < 30: return 15
@@ -196,13 +194,13 @@ def classify_signal(total_score):
     return "HOLD"
 
 
-# ── [BM-3] Bias Filter ────────────────────────────────────────────────────────
+# ── [BM-3] Bias Filter ───────────────────────────────────────────────────────
 def calc_bias_filter(close, ma20, ma60):
     """
     허리라인 = (MA20 + MA60) / 2
-    현재가 > 허리라인 × 1.05 → +5pt  (상단 바이어스)
-    현재가 < 허리라인 × 0.95 → -5pt  (하단 패널티)
-    그 외                    →  0pt  (중립)
+    종가 > 허리라인 × 1.05 → +5pt  (상단 돌파)
+    종가 ± 5% 구간          →  0pt  (중립)
+    종가 < 허리라인 × 0.95 → -5pt  (하단 이탈)
     Returns: (bias_score, waist_line, price_vs_waist_pct)
     """
     try:
@@ -220,23 +218,48 @@ def calc_bias_filter(close, ma20, ma60):
         return 0, 0.0, 0.0
 
 
-# ── [v2.6] tech_detail_map 로드 ───────────────────────────────────────────────
+# ── [BM-5] no_trade_tickers 로드 ─────────────────────────────────────────────
+def load_no_trade_set() -> set:
+    """
+    sfd_no_trade_tickers.json 로드.
+    {"no_trade_tickers": ["005930", ...], "generated_at": "...", ...}
+    Returns: set of ticker strings (6자리 zero-padded)
+    """
+    if not os.path.exists(NO_TRADE_JSON):
+        logging.info(f"[BM-5] no_trade JSON 없음 (정상): {NO_TRADE_JSON}")
+        return set()
+    try:
+        with open(NO_TRADE_JSON, encoding="utf-8") as f:
+            data = json.load(f)
+        # 배열 직접 or {"no_trade_tickers": [...]} 두 포맷 모두 지원
+        if isinstance(data, list):
+            tickers = data
+        elif isinstance(data, dict):
+            tickers = data.get("no_trade_tickers", data.get("tickers", []))
+        else:
+            tickers = []
+        result = {str(t).strip().zfill(6) for t in tickers if t}
+        logging.info(f"[BM-5] no_trade_set 로드: {len(result)}건 | {NO_TRADE_JSON}")
+        return result
+    except Exception as e:
+        logging.warning(f"[BM-5] no_trade JSON 로드 실패: {e}")
+        return set()
+
+
+# ── [v2.7] tech_detail_map 로드 ──────────────────────────────────────────────
 def load_tech_detail_map() -> dict:
     """
     sfd_technical_latest.csv → {ticker: {effective_tech, ...}}
     v1.3: max 85pt (+vol_surge BM-10)
-    v1.2: max 75pt (+pullback_zone)
-    v1.1: max 65pt
-    v1.0: max 40pt fallback
     """
     if not os.path.exists(TECH_DETAIL_CSV):
-        logging.warning(f"[v2.6] TECH_DETAIL_CSV not found: {TECH_DETAIL_CSV}")
-        logging.warning("[v2.6] Fallback to v2.2 basic tech_score")
+        logging.warning(f"[v2.7] TECH_DETAIL_CSV not found: {TECH_DETAIL_CSV}")
+        logging.warning("[v2.7] Fallback to v2.2 basic tech_score")
         return {}
     try:
         df = pd.read_csv(TECH_DETAIL_CSV, encoding="utf-8-sig", dtype={"ticker": str})
         if "ticker" not in df.columns or "tech_detail_score" not in df.columns:
-            logging.warning(f"[v2.6] TECH_DETAIL_CSV missing cols: {df.columns.tolist()}")
+            logging.warning(f"[v2.7] TECH_DETAIL_CSV missing cols: {df.columns.tolist()}")
             return {}
 
         has_total    = "tech_total_score"    in df.columns
@@ -244,11 +267,11 @@ def load_tech_detail_map() -> dict:
         has_sb       = "std_bar_score"       in df.columns
         has_label    = "vol_gap_label"       in df.columns
         has_pullback = "pullback_zone_score" in df.columns
-        has_vs       = "vol_surge_score"     in df.columns   # ★ BM-10
-        has_vs_label = "vol_surge_label"     in df.columns   # ★ BM-10
+        has_vs       = "vol_surge_score"     in df.columns  # ★ BM-10
+        has_vs_label = "vol_surge_label"     in df.columns  # ★ BM-10
 
         logging.info(
-            f"[v2.6] L2.7 cols: total={has_total} pb={has_pullback} "
+            f"[v2.7] L2.7 cols: total={has_total} pb={has_pullback} "
             f"vs={has_vs} vg={has_vg} sb={has_sb}"
         )
 
@@ -264,18 +287,16 @@ def load_tech_detail_map() -> dict:
 
             if has_total and not pd.isna(row.get("tech_total_score")):
                 effective_tech = float(row["tech_total_score"])
-                # v1.1 CSV → pullback 패치
                 if has_pullback and pb_score > 0 and effective_tech <= 65.0:
                     effective_tech += pb_score
                     tech_source_ver = "L2.7_v1.2_patched"
-                # v1.2 CSV → vol_surge 패치 (BM-10)
                 elif has_vs and vs_score > 0 and effective_tech <= 75.0:
                     effective_tech += vs_score
                     tech_source_ver = "L2.7_v1.3_patched"
                 else:
-                    if has_vs:        tech_source_ver = "L2.7_v1.3"
+                    if has_vs:         tech_source_ver = "L2.7_v1.3"
                     elif has_pullback: tech_source_ver = "L2.7_v1.2"
-                    else:             tech_source_ver = "L2.7_v1.1"
+                    else:              tech_source_ver = "L2.7_v1.1"
             else:
                 effective_tech  = float(row.get("tech_detail_score", 0))
                 tech_source_ver = "L2.7_v1.0"
@@ -292,8 +313,8 @@ def load_tech_detail_map() -> dict:
                 "vol_surge_label":     vs_label,   # ★ BM-10
                 "poc_score":           float(row.get("poc_score",           0)),
                 "sr_score":            float(row.get("sr_score",            0)),
-                "rsi":                 float(row.get("rsi",                 50)),
-                "ma_label":            str(row.get("ma_label",              "")),
+                "rsi":                 float(row.get("rsi",                50)),
+                "ma_label":            str(row.get("ma_label",             "")),
                 "tech_source_ver":     tech_source_ver,
             }
 
@@ -302,17 +323,17 @@ def load_tech_detail_map() -> dict:
         v11_cnt = sum(1 for v in tech_map.values() if v["tech_source_ver"] == "L2.7_v1.1")
         v10_cnt = sum(1 for v in tech_map.values() if v["tech_source_ver"] == "L2.7_v1.0")
         logging.info(
-            f"[v2.6] tech_map: {len(tech_map)} tickers | "
+            f"[v2.7] tech_map: {len(tech_map)} tickers | "
             f"v1.3={v13_cnt} v1.2={v12_cnt} v1.1={v11_cnt} v1.0={v10_cnt}"
         )
         return tech_map
 
     except Exception as e:
-        logging.error(f"[v2.6] tech_map load failed: {e}")
+        logging.error(f"[v2.7] tech_map load failed: {e}")
         return {}
 
 
-# ── 보조 맵 로드 ──────────────────────────────────────────────────────────────
+# ── 보조 데이터 로더 ──────────────────────────────────────────────────────────
 def load_news_score_map() -> dict:
     if not os.path.exists(NEWS_SCORE_CSV): return {}
     try:
@@ -340,12 +361,13 @@ def load_fund_score_map() -> dict:
 
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 def main():
-    logging.info("=== sfd_signal_aggregator v2.6 START ===")
+    logging.info("=== sfd_signal_aggregator v2.7 START ===")
     logging.info(f"BASE_DIR:   {BASE_DIR}")
     logging.info(f"LATEST_DIR: {LATEST_DIR}")
     logging.info(f"THRESHOLD:  RESERVE={THRESHOLD_RESERVE} WATCH={THRESHOLD_WATCH}")
-    logging.info("[v2.6] BM-3 bias_filter(±5pt) + BM-10 vol_surge(+10pt) 적용")
-    logging.info("[v2.6] tech_total max: 85pt (L2.7 v1.3)")
+    logging.info("[v2.7] BM-5 no_trade 연동 활성화")
+    logging.info("[v2.7] BM-3 bias_filter(±5pt) + BM-10 vol_surge(+10pt) 유지")
+    logging.info("[v2.7] tech_total max: 85pt (L2.7 v1.3)")
 
     trade_date = find_recent_trade_date()
     logging.info(f"trade_date: {trade_date}")
@@ -362,14 +384,16 @@ def main():
     news_score_map  = load_news_score_map()
     fund_map        = load_fund_score_map()
     tech_detail_map = load_tech_detail_map()
+    # [BM-5] no_trade set 로드
+    no_trade_set    = load_no_trade_set()
 
     use_tech_detail = len(tech_detail_map) > 0
-    logging.info(f"[v2.6] use_tech_detail={use_tech_detail} | tickers_in_map={len(tech_detail_map)}")
+    logging.info(f"[v2.7] use_tech_detail={use_tech_detail} | tickers_in_map={len(tech_detail_map)}")
 
     if "prev_value" in prev_df.columns:
         prev_df["prev_value"] = pd.to_numeric(prev_df["prev_value"], errors="coerce").fillna(0)
 
-    # prev_close_latest MA 컬럼 유무 확인 (BM-3)
+    # prev_close_latest MA 컬럼 확인 (BM-3)
     has_close_col = "close" in prev_df.columns
     has_ma20_col  = "ma20"  in prev_df.columns
     has_ma60_col  = "ma60"  in prev_df.columns
@@ -381,7 +405,7 @@ def main():
     results = []
     for ticker in tickers:
 
-        # ── tech_score 계산 ────────────────────────────────────────────────
+        # ── tech_score 계산 ──────────────────────────────────────────────────
         if use_tech_detail and ticker in tech_detail_map:
             td          = tech_detail_map[ticker]
             t_score     = td["effective_tech"]
@@ -451,13 +475,22 @@ def main():
 
         n_score  = score_news(ticker, news_score_map)
         i_score  = score_investor(ticker, investor_df)
-        th_score = score_theme(ticker, prev_df)
+        ths_score = score_theme(ticker, prev_df)
         f_score  = score_fundamental(ticker, fund_map)
 
-        # ★ [v2.6] total = 기존 + bias_filter + vol_surge
-        total  = t_score + n_score + i_score + th_score + f_score \
+        # [v2.7] total = 기존 합산 + bias_filter + vol_surge
+        total  = t_score + n_score + i_score + ths_score + f_score \
                  + bias_score + vs_score
-        signal = classify_signal(total)
+        # 원래 신호 분류 (no_trade와 독립적으로 보존)
+        raw_signal = classify_signal(total)
+
+        # ── [BM-5] no_trade 오버라이드 ────────────────────────────────────────
+        if ticker in no_trade_set:
+            signal        = "NO_TRADE"
+            no_trade_flag = True
+        else:
+            signal        = raw_signal
+            no_trade_flag = False
 
         name_row = input_df[input_df["ticker"] == ticker]
         name     = name_row.iloc[0].get("name", "") if not name_row.empty else ""
@@ -468,6 +501,8 @@ def main():
             "ticker":              ticker,
             "name":                name,
             "signal":              signal,
+            "raw_signal":          raw_signal,          # ★ BM-5: 원래 신호 보존
+            "no_trade":            no_trade_flag,        # ★ BM-5
             "total_score":         total,
             "tech_score":          t_score,
             "poc_score":           poc_s,
@@ -475,7 +510,7 @@ def main():
             "tech_source":         tech_source,
             "news_score":          round(n_score, 2),
             "investor_score":      i_score,
-            "theme_score":         th_score,
+            "theme_score":         ths_score,
             "fund_score":          round(f_score, 2),
             "rsi":                 rsi_val,
             "ma_align":            ma_align,
@@ -485,11 +520,11 @@ def main():
             "std_bar_score":       sb_score,
             "vol_gap_label":       vg_label,
             "pullback_zone_score": pb_score,
-            "vol_surge_score":     vs_score,           # ★ BM-10
-            "vol_surge_label":     vs_label,           # ★ BM-10
-            "bias_filter_score":   bias_score,         # ★ BM-3
-            "waist_line":          waist_line,         # ★ BM-3
-            "price_vs_waist_pct":  price_vs_waist_pct,# ★ BM-3
+            "vol_surge_score":     vs_score,             # ★ BM-10
+            "vol_surge_label":     vs_label,             # ★ BM-10
+            "bias_filter_score":   bias_score,           # ★ BM-3
+            "waist_line":          waist_line,           # ★ BM-3
+            "price_vs_waist_pct":  price_vs_waist_pct,  # ★ BM-3
             "tech_ver":            tech_ver,
         })
 
@@ -502,24 +537,25 @@ def main():
         index=False, encoding="utf-8-sig"
     )
 
-    elapsed    = int(time.time() - START_TIME)
-    reserve    = len(df_out[df_out["signal"] == "RESERVE_BUY"])
-    watch      = len(df_out[df_out["signal"] == "WATCH_ONLY"])
-    l27_cnt    = len(df_out[df_out["tech_source"] == "L2.7"])
-    v13_cnt    = len(df_out[df_out["tech_ver"].str.contains("v1.3", na=False)])
-    pb_nonzero = len(df_out[df_out["pullback_zone_score"] > 0])
-    vs_nonzero = len(df_out[df_out["vol_surge_score"] > 0])
-    bias_up    = len(df_out[df_out["bias_filter_score"] > 0])
-    bias_down  = len(df_out[df_out["bias_filter_score"] < 0])
+    elapsed     = int(time.time() - START_TIME)
+    reserve     = len(df_out[df_out["signal"] == "RESERVE_BUY"])
+    watch       = len(df_out[df_out["signal"] == "WATCH_ONLY"])
+    no_trade_ct = len(df_out[df_out["no_trade"] == True])
+    l27_cnt     = len(df_out[df_out["tech_source"] == "L2.7"])
+    v13_cnt     = len(df_out[df_out["tech_ver"].str.contains("v1.3", na=False)])
+    pb_nonzero  = len(df_out[df_out["pullback_zone_score"] > 0])
+    vs_nonzero  = len(df_out[df_out["vol_surge_score"] > 0])
+    bias_up     = len(df_out[df_out["bias_filter_score"] > 0])
+    bias_down   = len(df_out[df_out["bias_filter_score"] < 0])
 
     logging.info(
-        f"DONE | RESERVE={reserve} WATCH={watch} L2.7={l27_cnt}/{len(df_out)} "
+        f"DONE | RESERVE={reserve} WATCH={watch} NO_TRADE={no_trade_ct} L2.7={l27_cnt}/{len(df_out)} "
         f"v1.3={v13_cnt} pb={pb_nonzero} "
         f"[BM-10]vs={vs_nonzero} [BM-3]+{bias_up}/-{bias_down} "
         f"elapsed={elapsed}s MODE={MODE}"
     )
     print(
-        f"[OK] RESERVE={reserve} | WATCH={watch} | L2.7={l27_cnt}/{len(df_out)} | "
+        f"[OK] RESERVE={reserve} | WATCH={watch} | NO_TRADE={no_trade_ct} | L2.7={l27_cnt}/{len(df_out)} | "
         f"v1.3={v13_cnt} | pb={pb_nonzero} | "
         f"[BM-10]vs={vs_nonzero} | [BM-3]+{bias_up}/-{bias_down} | "
         f"elapsed={elapsed}s | MODE={MODE}"

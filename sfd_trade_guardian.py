@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-sfd_trade_guardian.py v1.1
+sfd_trade_guardian.py v1.2
 Layer 5.5 — Trade Guardian (매매 원칙 감시 + 심리 경보)
 
-v1.0 → v1.1 변경사항:
+v1.1 → v1.2 변경사항:
+  [BM-5] no_trade 연동
+    sfd_no_trade_tickers.json 읽어서 보유 종목 중 해당 ticker 발견 시
+    BM5_NO_TRADE WARN 경보 발생
+    "이벤트 발생 ±60분 구간 — 신규 진입/추가매수 금지"
+
+v1.1 변경사항:
   [BM-11] AF_TRAP_REVERSAL State Machine 추가 (야베스 사양서 §3.2)
-          손절 후 10봉 이내 손절가 재돌파 → 강력 재진입 신호
   [BM-04] TIP Noise Filter 강화: confirm_candles=2 기반 확정 손절
   [BM-03] Bias Filter: 허리라인을 52주 고저 기준으로 확장
 
@@ -19,9 +24,10 @@ v1.0 → v1.1 변경사항:
 입력: portfolio.json (보유 종목 + 등급 + 매수가)
       signal_latest.csv (L2 신호 출력)
       technical_latest.csv (L2.7 기술점수)
-      guardian_state.json (State Machine 상태 유지 — 신규)
+      guardian_state.json (State Machine 상태 유지)
+      sfd_no_trade_tickers.json (BM-5 — 신규)
 출력: guardian_alerts.json (Drive 업로드 대상)
-      guardian_state.json (State Machine 상태 저장 — 신규)
+      guardian_state.json (State Machine 상태 저장)
       STDOUT 요약 보고서
 
 실행: python sfd_trade_guardian.py
@@ -52,11 +58,11 @@ GRADE_PARAMS = {
 }
 
 PSYCHOLOGY_THRESHOLDS = {
-    "add_buy_overcount":      True,
-    "profit_loss_ratio_min":  2.0,
-    "distribution_alert":     True,
-    "waistline_below_ma20":   True,
-    "blackday_worst_n":       1,
+    "add_buy_overcount":    True,
+    "profit_loss_ratio_min": 2.0,
+    "distribution_alert":   True,
+    "waistline_below_ma20": True,
+    "blackday_worst_n":     1,
 }
 
 JABEZ_PARAMS = {
@@ -73,6 +79,8 @@ AF_TRAP_PARAMS = {
     "tip_confirm_candles":   2,
 }
 
+
+# ── 데이터 로더 ───────────────────────────────────────────────────────────────
 def load_portfolio() -> list:
     path = _p("portfolio.json")
     if not path.exists():
@@ -114,6 +122,35 @@ def save_guardian_state(state: dict):
     with open(state_path, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
 
+
+# ── [BM-5] no_trade_set 로드 ─────────────────────────────────────────────────
+def load_no_trade_set() -> set:
+    """
+    sfd_no_trade_tickers.json 로드.
+    Returns: set of ticker strings (6자리 zero-padded)
+    """
+    no_trade_path = _SFD_BASE / "outputs" / "latest" / "sfd_no_trade_tickers.json"
+    if not no_trade_path.exists():
+        print(f"[BM-5] no_trade JSON 없음 (정상): {no_trade_path}")
+        return set()
+    try:
+        with open(no_trade_path, encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            tickers = data
+        elif isinstance(data, dict):
+            tickers = data.get("no_trade_tickers", data.get("tickers", []))
+        else:
+            tickers = []
+        result = {str(t).strip().zfill(6) for t in tickers if t}
+        print(f"[BM-5] no_trade_set: {len(result)}건")
+        return result
+    except Exception as e:
+        print(f"[BM-5] no_trade JSON 로드 실패: {e}")
+        return set()
+
+
+# ── 경보 생성 함수 ────────────────────────────────────────────────────────────
 def alert(code, ticker, name, msg, severity="WARN"):
     return {
         "severity": severity,
@@ -123,6 +160,20 @@ def alert(code, ticker, name, msg, severity="WARN"):
         "message":  msg,
         "ts":       datetime.now().strftime("%Y-%m-%d %H:%M"),
     }
+
+
+# ── 경보 체크 함수들 ──────────────────────────────────────────────────────────
+def check_bm5_no_trade(ticker, name, no_trade_set: set):
+    """[BM-5] no_trade 구간 경보 — 신규 진입/추가매수 억제"""
+    alerts = []
+    if ticker in no_trade_set:
+        alerts.append(alert(
+            "BM5_NO_TRADE", ticker, name,
+            f"[BM-5 Volatility Buffer] 이벤트 ±60분 No-Trade 구간. "
+            f"신규 진입 및 추가매수 금지. 기존 보유 포지션 유지만 허용.",
+            severity="WARN"
+        ))
+    return alerts
 
 def check_stop_loss(h, params):
     alerts = []
@@ -184,10 +235,10 @@ def check_af_trap_reversal(ticker, name, h, guardian_state: dict) -> tuple:
             new_state = 3
             alerts.append(alert(
                 "AF_TRAP_REVERSAL", ticker, name,
-                f"[야베스 BM-11] 손절({stop_loss_level:,.0f}원) 후 {bars_since_exit}봉 만에 "
+                f"[야베스 BM-11] 손절가({stop_loss_level:,.0f}원) 후 {bars_since_exit}봉 이내 "
                 f"재돌파 (현재 {cur_prc:,.0f}원). "
-                f"거래량 증가: {'YES' if vol_delta > 0 else 'NO'}. "
-                f"AF 트랩 반전 강력 재진입 후보. 거래량·허리라인 최종 확인 후 결정.",
+                f"거래량 확인: {'YES' if vol_delta > 0 else 'NO'}. "
+                f"AF 방식 재진입 검토 권장. 허리라인 상단 복귀 후 재진입 확인.",
                 severity="CRITICAL"
             ))
     elif current_state == 3:
@@ -210,8 +261,8 @@ def check_add_buy_overcount(h):
     if add_count > max_count:
         alerts.append(alert(
             "ADD_BUY_OVERCOUNT", ticker, name,
-            f"추가매수 {add_count}회 → {grade}급 허용 {max_count}회 초과. "
-            f"요행 경보: 9번 폭탄 패턴 위험. 원칙 매매로 즉시 복귀.",
+            f"추가매수 {add_count}회 → {grade}급 상한 {max_count}회 초과. "
+            f"경고: 9회 추가매수 원칙 위반. 심리적 물타기 경보.",
             severity="CRITICAL"
         ))
     return alerts
@@ -227,8 +278,8 @@ def check_waistline(h, tech_map):
         gap_pct = (cur_p - ma20) / ma20 * 100
         alerts.append(alert(
             "BELOW_WAISTLINE", ticker, name,
-            f"현재가({cur_p:,.0f}) < 20일선({ma20:,.0f}) ({gap_pct:.1f}%). "
-            f"허리라인 아래 = 예측매매 구간. 확인매매 원칙 준수.",
+            f"현재가({cur_p:,.0f}) < 20일이평({ma20:,.0f}) ({gap_pct:.1f}%). "
+            f"허리라인 하향 → 예측매매 경고. 확정매수 원칙 적용.",
             severity="WARN"
         ))
     return alerts
@@ -243,8 +294,8 @@ def check_distribution(h, tech_map):
         vg = tech.get("vol_gap_score", "?")
         alerts.append(alert(
             "DISTRIBUTION_RISK", ticker, name,
-            f"설거지 의심 (vol_gap_label={label}, score={vg}). "
-            f"고점 거래량 >> 바닥 거래량. 즉시 비중 점검.",
+            f"설거지 의심 신호 (vol_gap_label={label}, score={vg}). "
+            f"상승 거래량 >> 하락 거래량. 비중 점검 필요.",
             severity="WARN"
         ))
     return alerts
@@ -259,8 +310,8 @@ def check_pullback_zone(ticker, name, tech_map):
     if pb_score >= JABEZ_PARAMS["pullback_score_threshold"]:
         alerts.append(alert(
             "JABEZ_PULLBACK", ticker, name,
-            f"야베스 숏딥/턴딥 감지 (pullback_zone_score={pb_score:.1f}). "
-            f"1차 상승 후 눌림목 진입 후보. 5/10일선 사이 수렴 확인 후 분할 진입 검토.",
+            f"야베스 숏딥/턴딥 눌림목 신호 (pullback_zone_score={pb_score:.1f}). "
+            f"1봉 이내 후 재상승 확인 필요. 5/10일선 근처 지지 확인 후 진입 권장.",
             severity="INFO"
         ))
     return alerts
@@ -274,9 +325,9 @@ def check_trap_reversal(ticker, name, signal_row):
                 today_chg >= JABEZ_PARAMS["trap_rebound_pct"]):
             alerts.append(alert(
                 "JABEZ_TRAP_REVERSAL", ticker, name,
-                f"야베스 양음트랩/불꽃반전: "
-                f"전일 {prev_chg:.1f}% 급락 → 당일 {today_chg:.1f}% 반등. "
-                f"세력 속임수 이후 강한 매수 의도 가능. 거래량 동반 여부 확인.",
+                f"야베스 양음트랩/음양트랩 반전: "
+                f"전일 {prev_chg:.1f}% 하락 → 당일 {today_chg:.1f}% 반등. "
+                f"세력 물량 정리 후 재진입 가능성. 추가 확인 후 진입 검토.",
                 severity="INFO"
             ))
     except Exception:
@@ -294,8 +345,8 @@ def find_blackday(holdings):
     if pnl < -5:
         alerts.append(alert(
             "BLACKDAY", ticker, name,
-            f"블랙데이 종목: {name} ({pnl:.2f}%). "
-            f"매매 시작 전 이 종목의 손실 이유를 먼저 복기하고 겸손함을 회복하십시오.",
+            f"포트폴리오 최대손실: {name} ({pnl:.2f}%). "
+            f"손실 원인 복기 및 동일 패턴 재발 방지 학습 필요.",
             severity="INFO"
         ))
     return alerts
@@ -309,35 +360,50 @@ def check_broken_jar(holdings):
     loss_ratio = loss_count / total_count
     if loss_ratio > 0.6:
         alerts.append(alert(
-            "BROKEN_JAR_WARNING", "PORTFOLIO", "전체포트폴리오",
-            f"손실 종목 비율 {loss_ratio*100:.0f}% ({loss_count}/{total_count}). "
-            f"깨진항아리 위험: 수익 기법 추가보다 리스크 관리 우선.",
+            "BROKEN_JAR_WARNING", "PORTFOLIO", "포트폴리오전체",
+            f"손실 종목 비중 {loss_ratio*100:.0f}% ({loss_count}/{total_count}). "
+            f"깨진항아리 경고: 시장 흐름 재점검 및 포지션 전반 축소 검토.",
             severity="WARN"
         ))
     return alerts
 
+
+# ── MAIN ──────────────────────────────────────────────────────────────────────
 def main():
     print("=" * 60)
-    print(" SFD Trade Guardian v1.1 — Layer 5.5")
-    print(f" 실행시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(" SFD Trade Guardian v1.2 — Layer 5.5")
+    print(f" 실행일시: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(" [BM-11] AF_TRAP_REVERSAL State Machine 활성")
+    print(" [BM-5]  no_trade Volatility Buffer 연동 활성")
     print("=" * 60)
+
     holdings       = load_portfolio()
     signal_rows    = load_csv_safe("signal_latest.csv")
     tech_rows      = load_csv_safe("technical_latest.csv")
     guardian_state = load_guardian_state()
+    # [BM-5] no_trade_set 로드
+    no_trade_set   = load_no_trade_set()
+
     signal_map = {r.get("ticker", r.get("stk_cd", "")): r for r in signal_rows}
     tech_map   = {r.get("ticker", r.get("stk_cd", "")): r for r in tech_rows}
+
     if not holdings:
-        print("[INFO] 보유 종목 없음 — 포트폴리오를 확인하세요.")
+        print("[INFO] 보유 종목 없음 → 포트폴리오 점검 대상 없음.")
+
     all_alerts    = []
     new_state_map = {}
+
     all_alerts += find_blackday(holdings)
     all_alerts += check_broken_jar(holdings)
+
     for h in holdings:
         ticker = h.get("ticker", h.get("stk_cd", ""))
         name   = h.get("name",   h.get("stk_nm", ticker))
         sig    = signal_map.get(ticker, {})
+
+        # [BM-5] no_trade 경보 — 가장 먼저 체크
+        all_alerts += check_bm5_no_trade(ticker, name, no_trade_set)
+
         all_alerts += check_stop_loss(h, GRADE_PARAMS)
         all_alerts += check_add_buy_overcount(h)
         all_alerts += check_waistline(h, tech_map)
@@ -349,11 +415,14 @@ def main():
         )
         all_alerts += af_alerts
         new_state_map[ticker] = updated_ticker_state
+
     save_guardian_state(new_state_map)
+
     severity_order = {"CRITICAL": 0, "WARN": 1, "INFO": 2}
     all_alerts.sort(key=lambda a: severity_order.get(a["severity"], 9))
+
     if not all_alerts:
-        print("\n이상 없음 — 모든 원칙 준수 중")
+        print("\n이상 없음 — 모든 매매 원칙 정상")
     else:
         print(f"\n총 {len(all_alerts)}건 경보:\n")
         for a in all_alerts:
@@ -362,20 +431,23 @@ def main():
             print(f"  종목: {a['name']} ({a['ticker']})")
             print(f"  내용: {a['message']}")
             print()
+
     out_dir  = _SFD_BASE / "outputs" / "latest"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "guardian_alerts.json"
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump({
             "generated_at": datetime.now().isoformat(),
-            "version":      "v1.1",
+            "version":      "v1.2",
             "total":        len(all_alerts),
             "critical":     sum(1 for a in all_alerts if a["severity"] == "CRITICAL"),
             "warn":         sum(1 for a in all_alerts if a["severity"] == "WARN"),
             "info":         sum(1 for a in all_alerts if a["severity"] == "INFO"),
+            "no_trade_cnt": sum(1 for a in all_alerts if a["code"] == "BM5_NO_TRADE"),
             "alerts":       all_alerts,
         }, f, ensure_ascii=False, indent=2)
     print(f"guardian_alerts.json 저장: {out_path}")
+
 
 if __name__ == "__main__":
     main()
