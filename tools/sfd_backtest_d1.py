@@ -1,151 +1,236 @@
-# sfd_backtest_d1.py v1.0 - D+1 사후검증
-# GitHub 저장경로: sfd-pipeline/tools/sfd_backtest_d1.py
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+sfd_backtest_d1.py — Layer 3  v1.3
+SFD D+1 사후검증 (실수익률 계산 활성화)
 
-import os, sys, time, glob, logging
-from datetime import datetime, timedelta
+변경점 v1.2 → v1.3:
+  - archive 경로 형식 통일: str(today/candidate) → strftime("%Y%m%d")
+  - Layer4(sfd_finalize.py)와 YYYYMMDD 형식 일치
+
+변경점 v1.1 → v1.2:
+  - SIGNAL_FILE: sfd_signal_latest.csv → sfd_master_signal_latest.csv (파일명 수정)
+
+변경점 v1.0 → v1.1:
+  - archive_today_signal(): sfd_prev_close_latest.csv 도 함께 아카이빙
+  - calc_return_d1(): return_d1 / win_flag 실값 계산
+  - summarize(): avg_return_d1 / win_rate_d1 실값 산출
+  - GRACEFUL DEGRADATION: archive prev_close 없으면 return_d1=None 유지
+
+D+1 수익률 계산 공식:
+  close_entry  = archive/{어제YYYYMMDD}/sfd_prev_close.csv  (신호 당일 종가)
+  close_exit   = sfd_prev_close_latest.csv (Layer 1이 오늘 저장 = 오늘 종가)
+  return_d1    = (close_exit - close_entry) / close_entry * 100  (%)
+  win_flag     = return_d1 > 0
+
+흐름도:
+  IN  : outputs/archive/{어제YYYYMMDD}/sfd_signal.csv      (어제 신호)
+  IN  : outputs/archive/{어제YYYYMMDD}/sfd_prev_close.csv  (어제 → 신호 당일 종가)
+  IN  : outputs/latest/sfd_prev_close_latest.csv   (오늘 종가 = 오늘 Layer1 저장)
+  OUT : outputs/latest/sfd_backtest_d1_latest.csv
+  OUT : outputs/latest/sfd_backtest_summary_latest.json
+  SIDE: outputs/archive/{오늘YYYYMMDD}/sfd_signal.csv       (오늘 신호 아카이빙)
+  SIDE: outputs/archive/{오늘YYYYMMDD}/sfd_prev_close.csv   (오늘 종가 아카이빙)
+
+버전: v1.3
+작성: Claude Sonnet 4.6 (2026-05-27)
+"""
+
+import json
+import shutil
+import sys
+from datetime import date, timedelta
+from pathlib import Path
 
 import pandas as pd
-import yfinance as yf
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import LATEST_DIR, HISTORY_DIR, INPUT_DIR
+_HERE          = Path(__file__).resolve().parent
+_PIPELINE_ROOT = _HERE.parent
+_OUTPUTS       = _PIPELINE_ROOT / "outputs"
+_LATEST        = _OUTPUTS / "latest"
+_ARCHIVE       = _OUTPUTS / "archive"
 
-VERIFY_DIR = os.path.join(HISTORY_DIR, "backtest")
-LOG_PATH   = os.path.join(LATEST_DIR,  "sfd_backtest_d1.log")
-os.makedirs(VERIFY_DIR, exist_ok=True)
+SIGNAL_FILE      = _LATEST / "sfd_master_signal_latest.csv"
+PREV_CLOSE_FILE  = _LATEST / "sfd_prev_close_latest.csv"
+BACKTEST_OUT     = _LATEST / "sfd_backtest_d1_latest.csv"
+SUMMARY_OUT      = _LATEST / "sfd_backtest_summary_latest.json"
 
-logging.basicConfig(filename=LOG_PATH, level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s", encoding="utf-8")
+TIER_ORDER = ["RESERVE_BUY", "WATCH_ONLY", "HOLD"]
 
-START_TIME = time.time()
-now        = datetime.now()
-print(f"\n========== SFD D+1 사후검증 v1.0 ==========")
-print(f"실행 시각: {now.strftime('%Y-%m-%d %H:%M:%S')}")
 
-def find_yesterday_signal():
-    files = sorted(glob.glob(os.path.join(HISTORY_DIR, "sfd_master_signal_*.csv")))
-    today_str = now.strftime("%Y%m%d")
-    candidates = [f for f in files if today_str not in f]
-    if not candidates:
-        return None, None
-    latest = candidates[-1]
-    date_str = os.path.basename(latest).replace("sfd_master_signal_","").replace(".csv","")
-    return latest, date_str
+def get_today() -> date:
+    return date.today()
 
-signal_file, signal_date = find_yesterday_signal()
 
-if signal_file is None:
-    print("검증할 이전 신호 파일 없음 - 건너뜀")
-    sys.exit(0)
+def archive_today_signal(today: date) -> None:
+    archive_dir = _ARCHIVE / today.strftime("%Y%m%d")   # v1.3 수정: str() → strftime
+    archive_dir.mkdir(parents=True, exist_ok=True)
 
-print(f"검증 대상 신호일: {signal_date}")
-signal_df = pd.read_csv(signal_file, dtype={"ticker": str})
-signal_df["ticker"] = signal_df["ticker"].astype(str).str.zfill(6)
-
-target_df = signal_df[signal_df["signal"].isin(["RESERVE_BUY", "WATCH_ONLY"])].copy()
-print(f"검증 종목수: {len(target_df)}")
-
-if target_df.empty:
-    print("검증 종목 없음 - 건너뜀")
-    sys.exit(0)
-
-prev_file = os.path.join(HISTORY_DIR, f"sfd_prev_close_{signal_date}.csv")
-if not os.path.exists(prev_file):
-    prev_file = os.path.join(LATEST_DIR, "sfd_prev_close_latest.csv")
-
-prev_df = pd.read_csv(prev_file, dtype={"ticker": str})
-prev_df["ticker"] = prev_df["ticker"].astype(str).str.zfill(6)
-prev_map = dict(zip(prev_df["ticker"], pd.to_numeric(prev_df["prev_close"], errors="coerce")))
-
-def get_next_day_close(tickers_raw, market_suffix):
-    close_map = {}
-    if not tickers_raw:
-        return close_map
-    yf_tickers = [f"{t}{market_suffix}" for t in tickers_raw]
-    start = (now - timedelta(days=5)).strftime("%Y-%m-%d")
-    end   = now.strftime("%Y-%m-%d")
-    try:
-        data = yf.download(yf_tickers, start=start, end=end,
-                           auto_adjust=True, progress=False, threads=True)
-        if data.empty:
-            return close_map
-        if isinstance(data.columns, pd.MultiIndex):
-            close_data = data["Close"]
-        else:
-            close_data = data[["Close"]].rename(columns={"Close": yf_tickers[0]})
-        signal_dt = pd.to_datetime(signal_date, format="%Y%m%d")
-        after = close_data[close_data.index > signal_dt]
-        if after.empty:
-            return close_map
-        next_row  = after.iloc[0]
-        next_date = after.index[0].strftime("%Y%m%d")
-        for yf_t, raw_t in zip(yf_tickers, tickers_raw):
-            val = next_row.get(yf_t) if hasattr(next_row, "get") else None
-            if val is not None and not pd.isna(val):
-                close_map[raw_t] = {"close": float(val), "date": next_date}
-    except Exception as e:
-        print(f"  yfinance 오류: {e}")
-    return close_map
-
-if "market" in signal_df.columns:
-    ks_tickers = target_df[target_df["ticker"].isin(
-        signal_df[signal_df["market"]=="KOSPI"]["ticker"])]["ticker"].tolist()
-    kq_tickers = target_df[~target_df["ticker"].isin(ks_tickers)]["ticker"].tolist()
-else:
-    ks_tickers = target_df["ticker"].tolist()
-    kq_tickers = []
-
-print("\nD+1 종가 수집 중...")
-next_map = {}
-next_map.update(get_next_day_close(ks_tickers, ".KS"))
-next_map.update(get_next_day_close(kq_tickers, ".KQ"))
-print(f"D+1 종가 수집 완료: {len(next_map)}종목")
-
-results = []
-for _, row in target_df.iterrows():
-    ticker   = row["ticker"]
-    name     = row.get("name", "")
-    signal   = row["signal"]
-    score    = row.get("total_score", 0)
-    d_close  = prev_map.get(ticker)
-    d1_data  = next_map.get(ticker, {})
-    d1_close = d1_data.get("close")
-    d1_date  = d1_data.get("date", "")
-
-    if d_close and d1_close and d_close > 0:
-        chg_pct = round((d1_close - d_close) / d_close * 100, 2)
-        hit     = "HIT"  if chg_pct > 0   else "MISS"
-        hit_1   = "HIT"  if chg_pct >= 1.0 else "MISS"
-        hit_2   = "HIT"  if chg_pct >= 2.0 else "MISS"
+    if SIGNAL_FILE.exists():
+        dest_signal = archive_dir / "sfd_signal.csv"
+        shutil.copy2(SIGNAL_FILE, dest_signal)
+        print(f"[Layer3] 오늘 신호 아카이빙: {dest_signal}")
     else:
-        chg_pct = None
-        hit = hit_1 = hit_2 = "N/A"
+        print(f"[Layer3] WARN: {SIGNAL_FILE} 없음 — signal 아카이빙 스킵")
 
-    results.append({
-        "signal_date": signal_date, "verify_date": d1_date,
-        "ticker": ticker, "name": name, "signal": signal, "total_score": score,
-        "d_close": d_close, "d1_close": d1_close, "chg_pct": chg_pct,
-        "hit_0pct": hit, "hit_1pct": hit_1, "hit_2pct": hit_2,
-    })
+    if PREV_CLOSE_FILE.exists():
+        dest_close = archive_dir / "sfd_prev_close.csv"
+        shutil.copy2(PREV_CLOSE_FILE, dest_close)
+        print(f"[Layer3] 오늘 종가 아카이빙: {dest_close}")
+    else:
+        print(f"[Layer3] WARN: {PREV_CLOSE_FILE} 없음 — prev_close 아카이빙 스킵")
 
-result_df = pd.DataFrame(results)
 
-print("\n===== 적중률 요약 =====")
-for sig in ["RESERVE_BUY", "WATCH_ONLY"]:
-    sub = result_df[(result_df["signal"]==sig) & (result_df["hit_0pct"]!="N/A")]
-    if sub.empty:
-        continue
-    h0  = round(len(sub[sub["hit_0pct"]=="HIT"]) / len(sub) * 100, 1)
-    h1  = round(len(sub[sub["hit_1pct"]=="HIT"]) / len(sub) * 100, 1)
-    h2  = round(len(sub[sub["hit_2pct"]=="HIT"]) / len(sub) * 100, 1)
-    avg = round(sub["chg_pct"].mean(), 2)
-    print(f"  {sig}: {len(sub)}종목 | 상승적중 {h0}% | 1%+ {h1}% | 2%+ {h2}% | 평균수익 {avg}%")
-    logging.info(f"{sig}: n={len(sub)} hit0={h0}% hit1={h1}% hit2={h2}% avg={avg}%")
+def find_yesterday_archive(today: date):
+    for delta in range(1, 5):
+        candidate = today - timedelta(days=delta)
+        signal_path = _ARCHIVE / candidate.strftime("%Y%m%d") / "sfd_signal.csv"   # v1.3 수정
+        close_path  = _ARCHIVE / candidate.strftime("%Y%m%d") / "sfd_prev_close.csv"  # v1.3 수정
+        if signal_path.exists():
+            print(f"[Layer3] 어제 신호 발견: {signal_path}")
+            if close_path.exists():
+                print(f"[Layer3] 어제 종가 발견: {close_path}")
+            else:
+                print(f"[Layer3] WARN: 어제 prev_close 없음 — return_d1=None 유지")
+            return signal_path, close_path if close_path.exists() else None
+    return None, None
 
-out_file = os.path.join(VERIFY_DIR, f"sfd_backtest_d1_{signal_date}.csv")
-result_df.to_csv(out_file, index=False, encoding="utf-8-sig")
-print(f"\n 검증 결과: {out_file}")
 
-elapsed = round(time.time() - START_TIME)
-print(f"소요: {elapsed}초")
-logging.info(f"완료 | 소요={elapsed}s")
+def load_signal(path: Path) -> pd.DataFrame:
+    df = pd.read_csv(path, dtype={"ticker": str})
+    required = {"ticker", "total_score", "signal_label"}
+    missing = required - set(df.columns)
+    if missing:
+        # signal_label 없으면 signal 컬럼으로 대체 (compat shim)
+        if "signal_label" in missing and "signal" in df.columns:
+            df["signal_label"] = df["signal"]
+            missing.discard("signal_label")
+    if missing:
+        raise ValueError(f"signal CSV 누락 컬럼: {missing}")
+    df["ticker"] = df["ticker"].str.zfill(6)
+    return df[["ticker", "total_score", "signal_label"]].copy()
+
+
+def load_close(path: Path, col_alias: str) -> pd.DataFrame:
+    df = pd.read_csv(path, dtype={"ticker": str})
+    df["ticker"] = df["ticker"].str.zfill(6)
+    candidates = ["close", "prev_close", "close_price", "종가", "adjusted_close"]
+    close_col = None
+    for c in candidates:
+        if c in df.columns:
+            close_col = c
+            break
+    if close_col is None:
+        raise ValueError(f"종가 컬럼 미발견. 컬럼 목록: {list(df.columns)}")
+    df = df[["ticker", close_col]].rename(columns={close_col: col_alias})
+    df[col_alias] = pd.to_numeric(df[col_alias], errors="coerce")
+    df = df.dropna(subset=[col_alias])
+    return df
+
+
+def calc_return_d1(prev_signal, entry_close, exit_close) -> pd.DataFrame:
+    merged = prev_signal.merge(exit_close, on="ticker", how="left")
+    merged["as_of_date"] = str(get_today())
+
+    if entry_close is None:
+        merged["close_entry"] = None
+        merged["return_d1"]   = None
+        merged["win_flag"]    = None
+        merged["matched"]     = merged["close_exit"].notna()
+        print("[Layer3] WARN: close_entry 없음 — return_d1=None (GRACEFUL)")
+    else:
+        merged = merged.merge(entry_close, on="ticker", how="left")
+        merged["matched"] = merged["close_exit"].notna() & merged["close_entry"].notna()
+        valid = merged["matched"]
+        merged.loc[valid, "return_d1"] = (
+            (merged.loc[valid, "close_exit"] - merged.loc[valid, "close_entry"])
+            / merged.loc[valid, "close_entry"] * 100
+        ).round(4)
+        merged.loc[~valid, "return_d1"] = None
+        merged["win_flag"] = merged["return_d1"].apply(
+            lambda x: bool(x > 0) if pd.notna(x) else None
+        )
+    return merged
+
+
+def summarize(df: pd.DataFrame) -> dict:
+    summary = {
+        "as_of_date":          str(get_today()),
+        "total_signals":       int(len(df)),
+        "matched_count":       int(df["matched"].sum()) if "matched" in df.columns else None,
+        "return_d1_available": bool(df["return_d1"].notna().any()) if "return_d1" in df.columns else False,
+        "tiers": {}
+    }
+    if "signal_label" not in df.columns:
+        return summary
+
+    for tier in TIER_ORDER:
+        sub = df[df["signal_label"] == tier]
+        if len(sub) == 0:
+            summary["tiers"][tier] = {"count": 0, "avg_score": None,
+                                       "avg_return_d1": None, "win_rate_d1": None}
+            continue
+        avg_score = float(sub["total_score"].astype(float).mean())
+        ret_series = sub["return_d1"].dropna().astype(float) if "return_d1" in sub.columns else pd.Series(dtype=float)
+        win_series = sub["win_flag"].dropna() if "win_flag" in sub.columns else pd.Series(dtype=bool)
+        summary["tiers"][tier] = {
+            "count":         int(len(sub)),
+            "avg_score":     round(avg_score, 2),
+            "avg_return_d1": round(float(ret_series.mean()), 4) if len(ret_series) > 0 else None,
+            "win_rate_d1":   round(float(win_series.mean()) * 100, 2) if len(win_series) > 0 else None,
+            "ret_sample_n":  int(len(ret_series)),
+        }
+    return summary
+
+
+def run() -> int:
+    today = get_today()
+    print(f"[Layer3] sfd_backtest_d1 v1.3 시작 | as_of={today}")
+
+    archive_today_signal(today)
+
+    yesterday_signal_path, yesterday_close_path = find_yesterday_archive(today)
+    if yesterday_signal_path is None:
+        print("[Layer3] SKIP: 어제 signal archive 없음 (신규 배포 첫날 또는 주말/공휴일)")
+        return 0
+
+    if not PREV_CLOSE_FILE.exists():
+        print(f"[Layer3] SKIP: {PREV_CLOSE_FILE} 없음")
+        return 0
+
+    try:
+        prev_signal = load_signal(yesterday_signal_path)
+        exit_close  = load_close(PREV_CLOSE_FILE, col_alias="close_exit")
+        entry_close = load_close(yesterday_close_path, col_alias="close_entry") \
+                      if yesterday_close_path else None
+    except Exception as e:
+        print(f"[Layer3] ERROR 데이터 로드 실패: {e}", file=sys.stderr)
+        return 1
+
+    print(f"[Layer3] 어제 신호: {len(prev_signal)}건 | 오늘 종가: {len(exit_close)}건")
+    if entry_close is not None:
+        print(f"[Layer3] 어제 종가(entry): {len(entry_close)}건 → return_d1 계산 활성화")
+
+    result  = calc_return_d1(prev_signal, entry_close, exit_close)
+    summary = summarize(result)
+
+    _LATEST.mkdir(parents=True, exist_ok=True)
+    result.to_csv(BACKTEST_OUT, index=False, encoding="utf-8-sig")
+    SUMMARY_OUT.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    print(f"[Layer3] 검증 완료")
+    print(f"  - 어제 신호: {summary['total_signals']}건")
+    print(f"  - 종가 매칭: {summary['matched_count']}건")
+    print(f"  - return_d1 활성화: {summary['return_d1_available']}")
+    for tier, stat in summary["tiers"].items():
+        ret_str = f"{stat['avg_return_d1']:+.2f}%" if stat['avg_return_d1'] is not None else "N/A"
+        win_str = f"{stat['win_rate_d1']:.1f}%"   if stat['win_rate_d1']  is not None else "N/A"
+        print(f"  - {tier}: {stat['count']}건 | avg_score={stat['avg_score']} "
+              f"| avg_return={ret_str} | win_rate={win_str}")
+    print(f"  → {BACKTEST_OUT}")
+    print(f"  → {SUMMARY_OUT}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(run())
