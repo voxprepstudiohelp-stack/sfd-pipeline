@@ -1,18 +1,39 @@
-# sfd_signal_aggregator.py | v2.8 | Claude (Anthropic) 2026-06-01
+# sfd_signal_aggregator.py | v2.9 | Claude (Anthropic) 2026-06-01
 # Deploy to: sfd-pipeline/sfd_signal_aggregator.py
 #
-# [v2.7 → v2.8 변경사항]
-# - [BM-12] ZONE_PULLBACK 연동
-#   sfd_zone_pullback_latest.csv 읽어서 zone_pullback_score (0~15pt) total에 가산
-#   신규 컬럼: zone_pullback_score, zone_pullback_label
-#   출력 로그: [BM-12]zp={n}건 출력
+# [v2.8 → v2.9 변경사항]
+# - [BM-13] 신호 무효화 타임아웃 (5봉)
 #
-# [스코어 아키텍처 현황 v2.8]
-# total = tech(max85) + news(max30) + investor(max20)
-#       + theme(max10) + fund(max15) + bias_filter(±5) + vol_surge(0~10)
-#       + zone_pullback(0~15)   ★ BM-12 신규
-# 이론상 max = 85+30+20+10+15+5+10+15 = 190pt
-# NO_TRADE 오버라이드: total_score 보존, signal만 변경
+#   State Machine:
+#     signal_timeout_state.json → {ticker: {signal, issued_date, bars_elapsed}}
+#
+#   로직:
+#     1) raw_signal이 RESERVE_BUY / WATCH_ONLY → 신호 발생
+#        state에 {signal, issued_date, bars_elapsed=0} 기록
+#     2) 이미 state 존재 → bars_elapsed += 1
+#        bars_elapsed > TIMEOUT_BARS(5) → signal = "SIGNAL_EXPIRED"
+#     3) raw_signal이 다시 임계값 이상 → 타임아웃 리셋 (새 신호로 갱신)
+#     4) raw_signal이 HOLD → 기존 state 유지 (카운팅 계속)
+#
+#   오버라이드 우선순위: NO_TRADE > SIGNAL_EXPIRED > raw_signal
+#
+#   신규 컬럼:
+#     signal_bars_elapsed  (int)  — 신호 발생 후 경과 봉수 (0 = 당일)
+#     signal_issued_date   (str)  — 신호 최초 발생일 (YYYYMMDD)
+#     signal_timeout       (bool) — True = SIGNAL_EXPIRED
+#
+#   신규 파일:
+#     outputs/latest/signal_timeout_state.json — 영속 상태 저장
+#
+# [스코어 아키텍처 현황 v2.9]
+# total = tech(85) + news(30) + investor(20) + theme(10) + fund(15)
+#       + bias_filter(±5) + vol_surge(10) + zone_pullback(15)  max=190pt
+# 신호 오버라이드: NO_TRADE > SIGNAL_EXPIRED > raw_signal
+#
+# [v2.8 변경사항] (유지)
+# - [BM-12] zone_pullback_score (0~15pt)
+# [v2.7 변경사항] (유지)
+# - [BM-5] no_trade 오버라이드
 
 import os
 import sys
@@ -49,7 +70,8 @@ NEWS_SCORE_CSV      = os.path.join(LATEST_DIR, "sfd_news_score_latest.csv")
 FUNDAMENTAL_CSV     = os.path.join(LATEST_DIR, "sfd_fundamental_latest.csv")
 TECH_DETAIL_CSV     = os.path.join(LATEST_DIR, "sfd_technical_latest.csv")
 NO_TRADE_JSON       = os.path.join(LATEST_DIR, "sfd_no_trade_tickers.json")
-ZONE_PULLBACK_CSV   = os.path.join(LATEST_DIR, "sfd_zone_pullback_latest.csv")  # ★ BM-12
+ZONE_PULLBACK_CSV   = os.path.join(LATEST_DIR, "sfd_zone_pullback_latest.csv")
+TIMEOUT_STATE_JSON  = os.path.join(LATEST_DIR, "signal_timeout_state.json")  # ★ BM-13
 
 logging.basicConfig(
     handlers=[
@@ -78,12 +100,14 @@ THRESHOLD_WATCH   = 70
 MODE = "ORIGINAL"
 
 # [BM-3] Bias Filter
-BIAS_MA_MID    = 20
-BIAS_MA_LONG   = 60
 BIAS_UPPER_PCT = 1.05
 BIAS_LOWER_PCT = 0.95
 BIAS_UPPER_PT  = 5
 BIAS_LOWER_PT  = -5
+
+# [BM-13] Signal Timeout
+TIMEOUT_BARS          = 5     # 신호 발생 후 유효 봉수 (거래일 기준)
+TIMEOUT_SIGNALS       = {"RESERVE_BUY", "WATCH_ONLY"}  # 타임아웃 대상 신호
 
 
 # ── 최근 거래일 ───────────────────────────────────────────────────────────────
@@ -117,7 +141,7 @@ def get_technical_data(ticker, end_date):
         df    = fdr.DataReader(ticker, start, end.strftime("%Y-%m-%d"))
         if df is None or len(df) < MA_LONG: return None
         df = df.sort_index()
-        df["rsi"]          = calc_rsi(df["Close"], RSI_PERIOD)
+        df["rsi"]           = calc_rsi(df["Close"], RSI_PERIOD)
         df[f"ma{MA_SHORT}"] = df["Close"].rolling(MA_SHORT).mean()
         df[f"ma{MA_MID}"]   = df["Close"].rolling(MA_MID).mean()
         df[f"ma{MA_LONG}"]  = df["Close"].rolling(MA_LONG).mean()
@@ -230,17 +254,12 @@ def load_no_trade_set() -> set:
 
 # ── [BM-12] zone_pullback_map 로드 ────────────────────────────────────────────
 def load_zone_pullback_map() -> dict:
-    """
-    sfd_zone_pullback_latest.csv → {ticker: {zone_pullback_score, zone_pullback_label}}
-    score가 0인 종목은 파일에 없으므로 미존재 = 0점 처리
-    """
     if not os.path.exists(ZONE_PULLBACK_CSV):
         logging.info(f"[BM-12] zone_pullback CSV 없음: {ZONE_PULLBACK_CSV}")
         return {}
     try:
         df = pd.read_csv(ZONE_PULLBACK_CSV, encoding="utf-8-sig", dtype={"ticker": str})
         if "ticker" not in df.columns or "zone_pullback_score" not in df.columns:
-            logging.warning(f"[BM-12] zone_pullback CSV 컬럼 부족: {df.columns.tolist()}")
             return {}
         df["ticker"] = df["ticker"].str.strip().str.zfill(6)
         result = {}
@@ -250,17 +269,105 @@ def load_zone_pullback_map() -> dict:
                 "zone_pullback_score": float(row.get("zone_pullback_score", 0) or 0),
                 "zone_pullback_label": str(row.get("zone_pullback_label", "") or ""),
             }
-        logging.info(f"[BM-12] zone_pullback_map: {len(result)}건 로드")
+        logging.info(f"[BM-12] zone_pullback_map: {len(result)}건")
         return result
     except Exception as e:
         logging.warning(f"[BM-12] zone_pullback_map 로드 실패: {e}")
         return {}
 
 
+# ── [BM-13] Signal Timeout State Machine ─────────────────────────────────────
+def load_timeout_state() -> dict:
+    """
+    signal_timeout_state.json 로드.
+    스키마: {
+      "ticker": {
+        "signal":        str,   — 기록된 신호 (RESERVE_BUY / WATCH_ONLY)
+        "issued_date":   str,   — 최초 발생일 YYYYMMDD
+        "bars_elapsed":  int,   — 경과 봉수 (0=당일)
+      }
+    }
+    """
+    if not os.path.exists(TIMEOUT_STATE_JSON):
+        return {}
+    try:
+        with open(TIMEOUT_STATE_JSON, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logging.warning(f"[BM-13] timeout_state 로드 실패: {e}")
+        return {}
+
+def save_timeout_state(state: dict):
+    try:
+        with open(TIMEOUT_STATE_JSON, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logging.warning(f"[BM-13] timeout_state 저장 실패: {e}")
+
+def apply_signal_timeout(ticker: str, raw_signal: str, trade_date: str,
+                         prev_state: dict) -> tuple:
+    """
+    BM-13 Signal Timeout State Machine.
+
+    Returns:
+      (final_signal, bars_elapsed, issued_date, is_timeout, updated_ticker_state)
+
+    State transitions:
+      raw_signal in TIMEOUT_SIGNALS:
+        - 신규 or 재발화 → state 갱신, bars_elapsed=0, signal=raw_signal
+      raw_signal == HOLD:
+        - state 존재 → bars_elapsed += 1
+          bars_elapsed > TIMEOUT_BARS → SIGNAL_EXPIRED
+          else → 이전 signal 유지 (아직 유효)
+        - state 없음 → HOLD 그대로
+    """
+    ticker_state = prev_state.get(ticker)
+
+    if raw_signal in TIMEOUT_SIGNALS:
+        # 신규 발화 또는 재발화: 항상 리셋
+        new_state = {
+            "signal":       raw_signal,
+            "issued_date":  trade_date,
+            "bars_elapsed": 0,
+        }
+        return raw_signal, 0, trade_date, False, new_state
+
+    elif raw_signal == "HOLD":
+        if ticker_state is None:
+            # 추적 이력 없음 → 그냥 HOLD
+            return "HOLD", 0, "", False, None
+
+        # 이미 신호가 발화된 상태 → 봉 카운팅
+        bars = int(ticker_state.get("bars_elapsed", 0)) + 1
+        issued = ticker_state.get("issued_date", trade_date)
+        sig    = ticker_state.get("signal", "HOLD")
+
+        if bars > TIMEOUT_BARS:
+            # 타임아웃 초과 → 만료
+            new_state = {
+                "signal":       sig,
+                "issued_date":  issued,
+                "bars_elapsed": bars,
+            }
+            return "SIGNAL_EXPIRED", bars, issued, True, new_state
+        else:
+            # 아직 유효 → 이전 신호 유지
+            new_state = {
+                "signal":       sig,
+                "issued_date":  issued,
+                "bars_elapsed": bars,
+            }
+            return sig, bars, issued, False, new_state
+
+    else:
+        # 예외 (NO_TRADE 등 외부 오버라이드 전 단계에서 도달 불가)
+        return raw_signal, 0, "", False, None
+
+
 # ── tech_detail_map 로드 ──────────────────────────────────────────────────────
 def load_tech_detail_map() -> dict:
     if not os.path.exists(TECH_DETAIL_CSV):
-        logging.warning(f"[v2.8] TECH_DETAIL_CSV not found: {TECH_DETAIL_CSV}")
+        logging.warning(f"[v2.9] TECH_DETAIL_CSV not found")
         return {}
     try:
         df = pd.read_csv(TECH_DETAIL_CSV, encoding="utf-8-sig", dtype={"ticker": str})
@@ -314,11 +421,10 @@ def load_tech_detail_map() -> dict:
                 "tech_source_ver":     tech_source_ver,
             }
 
-        v13_cnt = sum(1 for v in tech_map.values() if "v1.3" in v["tech_source_ver"])
-        logging.info(f"[v2.8] tech_map: {len(tech_map)} tickers | v1.3={v13_cnt}")
+        logging.info(f"[v2.9] tech_map: {len(tech_map)} tickers")
         return tech_map
     except Exception as e:
-        logging.error(f"[v2.8] tech_map load failed: {e}")
+        logging.error(f"[v2.9] tech_map load failed: {e}")
         return {}
 
 
@@ -350,10 +456,11 @@ def load_fund_score_map() -> dict:
 
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 def main():
-    logging.info("=== sfd_signal_aggregator v2.8 START ===")
+    logging.info("=== sfd_signal_aggregator v2.9 START ===")
     logging.info(f"BASE_DIR:   {BASE_DIR}")
     logging.info(f"THRESHOLD:  RESERVE={THRESHOLD_RESERVE} WATCH={THRESHOLD_WATCH}")
-    logging.info("[v2.8] BM-12 zone_pullback(0~15pt) + BM-5 no_trade + BM-3 bias_filter + BM-10 vol_surge")
+    logging.info(f"[BM-13] Signal Timeout: {TIMEOUT_BARS}봉 | 대상: {TIMEOUT_SIGNALS}")
+    logging.info("[v2.9] BM-13 timeout + BM-12 zp + BM-5 no_trade + BM-3 bias + BM-10 vs")
 
     trade_date = find_recent_trade_date()
     logging.info(f"trade_date: {trade_date}")
@@ -371,12 +478,14 @@ def main():
     fund_map          = load_fund_score_map()
     tech_detail_map   = load_tech_detail_map()
     no_trade_set      = load_no_trade_set()
-    zone_pullback_map = load_zone_pullback_map()   # ★ BM-12
+    zone_pullback_map = load_zone_pullback_map()
+    timeout_state     = load_timeout_state()          # ★ BM-13
 
     use_tech_detail = len(tech_detail_map) > 0
     logging.info(
-        f"[v2.8] use_tech_detail={use_tech_detail} | tech={len(tech_detail_map)} "
-        f"| no_trade={len(no_trade_set)} | zp={len(zone_pullback_map)}"
+        f"[v2.9] use_tech_detail={use_tech_detail} | tech={len(tech_detail_map)} "
+        f"| no_trade={len(no_trade_set)} | zp={len(zone_pullback_map)} "
+        f"| timeout_tracked={len(timeout_state)}"
     )
 
     if "prev_value" in prev_df.columns:
@@ -389,7 +498,9 @@ def main():
     tickers = input_df["ticker"].dropna().astype(str).str.zfill(6).unique().tolist()
     logging.info(f"tickers: {len(tickers)}")
 
-    results = []
+    results           = []
+    new_timeout_state = {}   # ★ BM-13: 이번 실행 후 저장할 state
+
     for ticker in tickers:
 
         # ── tech_score 계산 ──────────────────────────────────────────────────
@@ -418,7 +529,6 @@ def main():
                     vol_ratio = round(vol / vavg, 2) if vavg > 0 else 0.0
                 except: pass
 
-            # [BM-3] Bias Filter
             bias_score = waist_line = price_vs_waist_pct = 0
             if not pc_row.empty and has_close_col and has_ma20_col and has_ma60_col:
                 try:
@@ -432,7 +542,6 @@ def main():
                 except: pass
 
         else:
-            # v2.2 fallback
             tech = get_technical_data(ticker, trade_date)
             if tech is None: continue
 
@@ -460,23 +569,29 @@ def main():
         ths_score = score_theme(ticker, prev_df)
         f_score   = score_fundamental(ticker, fund_map)
 
-        # ★ [BM-12] zone_pullback_score
-        zp_data   = zone_pullback_map.get(ticker, {})
-        zp_score  = float(zp_data.get("zone_pullback_score", 0) or 0)
-        zp_label  = str(zp_data.get("zone_pullback_label", "") or "")
+        zp_data  = zone_pullback_map.get(ticker, {})
+        zp_score = float(zp_data.get("zone_pullback_score", 0) or 0)
+        zp_label = str(zp_data.get("zone_pullback_label", "") or "")
 
-        # [v2.8] total
-        total = (t_score + n_score + i_score + ths_score + f_score
-                 + bias_score + vs_score + zp_score)
-
+        total      = (t_score + n_score + i_score + ths_score + f_score
+                      + bias_score + vs_score + zp_score)
         raw_signal = classify_signal(total)
 
-        # [BM-5] no_trade 오버라이드
+        # ── [BM-13] Signal Timeout State Machine ────────────────────────────
+        (timeout_signal, bars_elapsed, issued_date,
+         is_timeout, updated_ts) = apply_signal_timeout(
+             ticker, raw_signal, trade_date, timeout_state
+         )
+        # state 갱신 (None이면 추적 불필요한 HOLD → 저장 안 함)
+        if updated_ts is not None:
+            new_timeout_state[ticker] = updated_ts
+
+        # ── [BM-5] no_trade 오버라이드 (최우선) ─────────────────────────────
         if ticker in no_trade_set:
             signal        = "NO_TRADE"
             no_trade_flag = True
         else:
-            signal        = raw_signal
+            signal        = timeout_signal   # SIGNAL_EXPIRED or raw_signal
             no_trade_flag = False
 
         name_row = input_df[input_df["ticker"] == ticker]
@@ -490,6 +605,9 @@ def main():
             "signal":               signal,
             "raw_signal":           raw_signal,
             "no_trade":             no_trade_flag,
+            "signal_timeout":       is_timeout,          # ★ BM-13
+            "signal_bars_elapsed":  bars_elapsed,        # ★ BM-13
+            "signal_issued_date":   issued_date,         # ★ BM-13
             "total_score":          total,
             "tech_score":           t_score,
             "poc_score":            poc_s,
@@ -507,15 +625,18 @@ def main():
             "std_bar_score":        sb_score,
             "vol_gap_label":        vg_label,
             "pullback_zone_score":  pb_score,
-            "vol_surge_score":      vs_score,           # BM-10
-            "vol_surge_label":      vs_label,           # BM-10
-            "bias_filter_score":    bias_score,         # BM-3
-            "waist_line":           waist_line,         # BM-3
-            "price_vs_waist_pct":   price_vs_waist_pct,# BM-3
-            "zone_pullback_score":  zp_score,           # ★ BM-12
-            "zone_pullback_label":  zp_label,           # ★ BM-12
+            "vol_surge_score":      vs_score,
+            "vol_surge_label":      vs_label,
+            "bias_filter_score":    bias_score,
+            "waist_line":           waist_line,
+            "price_vs_waist_pct":   price_vs_waist_pct,
+            "zone_pullback_score":  zp_score,
+            "zone_pullback_label":  zp_label,
             "tech_ver":             tech_ver,
         })
+
+    # ★ [BM-13] 상태 저장
+    save_timeout_state(new_timeout_state)
 
     df_out = (pd.DataFrame(results)
               .sort_values("total_score", ascending=False)
@@ -530,6 +651,7 @@ def main():
     reserve      = len(df_out[df_out["signal"] == "RESERVE_BUY"])
     watch        = len(df_out[df_out["signal"] == "WATCH_ONLY"])
     no_trade_ct  = len(df_out[df_out["no_trade"] == True])
+    expired_ct   = len(df_out[df_out["signal_timeout"] == True])
     zp_nonzero   = len(df_out[df_out["zone_pullback_score"] > 0])
     vs_nonzero   = len(df_out[df_out["vol_surge_score"] > 0])
     bias_up      = len(df_out[df_out["bias_filter_score"] > 0])
@@ -537,15 +659,18 @@ def main():
 
     logging.info(
         f"DONE | RESERVE={reserve} WATCH={watch} NO_TRADE={no_trade_ct} "
-        f"[BM-12]zp={zp_nonzero} [BM-10]vs={vs_nonzero} [BM-3]+{bias_up}/-{bias_down} "
+        f"[BM-13]EXPIRED={expired_ct} [BM-12]zp={zp_nonzero} "
+        f"[BM-10]vs={vs_nonzero} [BM-3]+{bias_up}/-{bias_down} "
         f"elapsed={elapsed}s MODE={MODE}"
     )
     print(
         f"[OK] RESERVE={reserve} | WATCH={watch} | NO_TRADE={no_trade_ct} | "
-        f"[BM-12]zp={zp_nonzero} | [BM-10]vs={vs_nonzero} | "
-        f"[BM-3]+{bias_up}/-{bias_down} | elapsed={elapsed}s | MODE={MODE}"
+        f"[BM-13]EXPIRED={expired_ct} | [BM-12]zp={zp_nonzero} | "
+        f"[BM-10]vs={vs_nonzero} | [BM-3]+{bias_up}/-{bias_down} | "
+        f"elapsed={elapsed}s | MODE={MODE}"
     )
     print(f"  -> {LATEST_CSV}")
+    print(f"  -> {TIMEOUT_STATE_JSON}")
 
 
 if __name__ == "__main__":
