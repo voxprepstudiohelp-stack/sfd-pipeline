@@ -1,11 +1,11 @@
-# sfd_technical_analyzer.py | v1.3 | Layer 2.7 | Claude (Anthropic) 2026-05-31
+# sfd_technical_analyzer.py | v1.4 | Layer 2.7 | Claude (Anthropic) 2026-05-31
 # Deploy to: sfd-pipeline/sfd_technical_analyzer.py
 #
 # [Layer 2.7] 기술적 분석 / 스코어링 / 기준봉 자동 탐지
 # 입력: inputs/sfd_master_signal_input.csv  (ticker 목록)
 # 출력: outputs/latest/sfd_technical_latest.csv
 #
-# [스코어 아키텍처] tech_total_score (max 85pt ★ v1.3)
+# [스코어 아키텍처] tech_total_score (max 93pt ★ v1.4)
 #   [A] Volume Profile / POC 점수        : 0~15pt  (v1.0 유지)
 #   [B] Support/Resistance 점수          : 0~10pt  (v1.0 유지)
 #   [C] RSI 포지션 (과매도)               : 0~5pt   (v1.0 유지)
@@ -18,6 +18,14 @@
 #
 # [v1.3 변경사항]
 # - [H] vol_surge_score (치량천): Volume>Max20*1.5 AND 양봉 → +10pt (BM-10)
+# - tech_total_score max: 75pt → 85pt
+#
+# [v1.4 변경사항]
+# - [I] ma60_direction_score 추가: MA60 5봉 기울기 예측 → 0/2/5/8pt (BM-2)
+# - tech_total_score max: 85pt → 93pt
+#
+# [v1.3 변경사항]
+# - [H] vol_surge_score (치량천): Volume>Max20×1.5 AND 양봉 → +10pt (BM-10)
 # - tech_total_score max: 75pt → 85pt
 #
 # [v1.2 변경사항]
@@ -86,6 +94,12 @@ PB_DROP_MIN_PCT     = 3.0
 PB_DROP_MAX_PCT     = 15.0
 PB_VOL_SHRINK_RATIO = 0.7
 PB_MA_ALIGN_REQ     = True
+
+# ★ [I] MA60 Direction 파라미터 (v1.4 신규 BM-2)
+MA60_DIR_LOOKBACK    = 5    # MA60 기울기 비교 봉수 (N봉 전 대비)
+MA60_DIR_RISING_STR  = 0.5  # 강한 상승 임계 (slope_pct >= +0.5%)
+MA60_DIR_RISING_MILD = 0.1  # 완만 상승 임계 (slope_pct >= +0.1%)
+MA60_DIR_FLAT_LOW    = -0.1 # 수평 하한 임계 (slope_pct >= -0.1%)
 
 START_TIME = time.time()
 
@@ -159,7 +173,7 @@ def calc_sr_score(df: pd.DataFrame) -> tuple:
         return 0, 0.0, 0.0
 
 
-# ── [C] RSI 점수 (0~5) ───────────────────────────────────────────────────────
+# ── [C] RSI 점수 (0~5) ──────────────────────────────────────────────────────
 def calc_rsi(series: pd.Series, period: int = 14) -> float:
     delta    = series.diff()
     gain     = delta.clip(lower=0)
@@ -246,7 +260,7 @@ def calc_volume_gap_score(df: pd.DataFrame) -> tuple:
         return 0, 0.0, "error"
 
 
-# ── [F] Standard Bar Score (0~10) ★ v1.1 ────────────────────────────────────
+# ── [F] Standard Bar Score (0~10) ★ v1.1 ───────────────────────────────────
 def calc_standard_bar_score(df: pd.DataFrame) -> tuple:
     try:
         if len(df) < STD_BAR_BREAKOUT_WIN + STD_BAR_LOOKBACK + 5:
@@ -377,7 +391,7 @@ def calc_pullback_zone_score(df: pd.DataFrame) -> tuple:
         return 0, 0.0, 0, "error"
 
 
-# ── [H] Volume Surge Score (치량천) (0~10) ★ v1.3 BM-10 ─────────────────────
+# ── [H] Volume Surge Score (치량천) (0~10) ★ v1.3 BM-10 ────────────────────
 def calc_volume_surge_score(df: pd.DataFrame) -> tuple:
     """
     [BM-10] 치량천: 당일 거래량 > 최근 20일 최대 거래량 * 1.5 AND 양봉
@@ -418,7 +432,47 @@ def calc_volume_surge_score(df: pd.DataFrame) -> tuple:
         return 0, 0.0, "error"
 
 
-# ── OHLCV 취득 ────────────────────────────────────────────────────────────────
+# ── [I] MA60 Direction Score (0~8) ★ v1.4 BM-2 ──────────────────────────────────
+def calc_ma60_direction_score(df: pd.DataFrame) -> tuple:
+    """
+    [BM-2] MA60 기울기 방향 예측: N봉 전 MA60 대비 현재 MA60 기울기(slope_pct) 계산
+      slope_pct >= +0.5% → score=8, label="MA60_RISING"      (강한 상승 추세)
+      slope_pct >= +0.1% → score=5, label="MA60_MILD_RISE"   (완만 상승)
+      slope_pct >= -0.1% → score=2, label="MA60_FLAT"        (수평 — 관망)
+      slope_pct <  -0.1% → score=0, label="MA60_DECLINING"   (하락)
+    Returns: (score 0~8, slope_pct, label)
+    """
+    try:
+        min_len = 60 + MA60_DIR_LOOKBACK + 1
+        if len(df) < min_len:
+            return 0, 0.0, "insufficient"
+
+        close = df["Close"]
+        ma60_series = close.rolling(60).mean()
+
+        ma60_cur  = ma60_series.iloc[-1]
+        ma60_prev = ma60_series.iloc[-(MA60_DIR_LOOKBACK + 1)]
+
+        if pd.isna(ma60_cur) or pd.isna(ma60_prev) or ma60_prev == 0:
+            return 0, 0.0, "ma60_insufficient"
+
+        slope_pct = round((ma60_cur - ma60_prev) / ma60_prev * 100, 4)
+
+        if slope_pct >= MA60_DIR_RISING_STR:
+            return 8, slope_pct, "MA60_RISING"
+        elif slope_pct >= MA60_DIR_RISING_MILD:
+            return 5, slope_pct, "MA60_MILD_RISE"
+        elif slope_pct >= MA60_DIR_FLAT_LOW:
+            return 2, slope_pct, "MA60_FLAT"
+        else:
+            return 0, slope_pct, "MA60_DECLINING"
+
+    except Exception as e:
+        logging.debug(f"ma60_direction_score error: {e}")
+        return 0, 0.0, "error"
+
+
+# ── OHLCV 취득 ──────────────────────────────────────────────────────────
 def fetch_ohlcv(ticker: str, end_date: datetime) -> pd.DataFrame | None:
     try:
         start = (end_date - timedelta(days=LOOKBACK_DAYS * 2)).strftime("%Y-%m-%d")
@@ -462,12 +516,13 @@ def analyze_ticker(ticker: str, end_date: datetime) -> dict | None:
         rsi_score                                         = calc_rsi_score(rsi_val)
         ma_score,   ma_label                              = calc_ma_score(df)
         vg_score,   vol_gap_ratio, vg_label               = calc_volume_gap_score(df)
-        sb_score,   sb_conds,      sb_bar_idx             = calc_standard_bar_score(df)
+        sb_score,   sb_conds,      sb_bar_idx = calc_standard_bar_score(df)
         pb_score,   pb_drop_pct,   pb_conds,  pb_label    = calc_pullback_zone_score(df)
         vs_score,   vol_surge_ratio, vs_label             = calc_volume_surge_score(df)  # ★ BM-10
+        ma60_dir_score, ma60_slope_pct, ma60_dir_label   = calc_ma60_direction_score(df)  # ★ BM-2
 
         tech_detail_score = poc_score + sr_score + rsi_score + ma_score         # max 40
-        tech_total_score  = tech_detail_score + vg_score + sb_score + pb_score + vs_score  # ★ max 85
+        tech_total_score  = tech_detail_score + vg_score + sb_score + pb_score + vs_score + ma60_dir_score  # ★ max 93
 
         return {
             "ticker":              ticker.zfill(6),
@@ -496,9 +551,13 @@ def analyze_ticker(ticker: str, end_date: datetime) -> dict | None:
             "pullback_conds":      pb_conds,
             "pullback_label":      pb_label,
             # ── v1.3 컬럼 [H] 치량천 BM-10 ★ ──────────────────────────────
-            "vol_surge_score":     vs_score,        # 0~10
-            "vol_surge_ratio":     vol_surge_ratio, # 당일/20일최대 비율
-            "vol_surge_label":     vs_label,        # vol_surge_bull/bear/normal
+            "vol_surge_score":     vs_score,
+            "vol_surge_ratio":     vol_surge_ratio,
+            "vol_surge_label":     vs_label,
+            # ── v1.4 신규 [I] MA60 Direction BM-2 ★ ──────────────────────────
+            "ma60_dir_score":      ma60_dir_score,
+            "ma60_slope_pct":      ma60_slope_pct,
+            "ma60_dir_label":      ma60_dir_label,
             # ── 합산 ────────────────────────────────────────────────────────
             "tech_total_score":    tech_total_score,
         }
@@ -509,10 +568,10 @@ def analyze_ticker(ticker: str, end_date: datetime) -> dict | None:
 
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 def main():
-    logging.info("=== sfd_technical_analyzer v1.3 START ===")
+    logging.info("=== sfd_technical_analyzer v1.4 START ===")
     logging.info(f"BASE_DIR:  {BASE_DIR}")
     logging.info(f"SCIPY:     {SCIPY_AVAILABLE}")
-    logging.info("SCORE MAX: v1.0=40pt / v1.1=65pt / v1.2=75pt / v1.3 total=85pt (+vol_surge BM-10)")
+    logging.info("SCORE MAX: v1.0=40pt / v1.1=65pt / v1.2=75pt / v1.3=85pt / v1.4 total=93pt (+MA60_DIR BM-2)")
 
     if not os.path.exists(INPUT_CSV):
         logging.error(f"INPUT_CSV not found: {INPUT_CSV}")
@@ -563,6 +622,7 @@ def main():
 
     elapsed = int(time.time() - START_TIME)
 
+    ma60_rising = df_out[df_out["ma60_dir_label"] == "MA60_RISING"]
     pb_active   = df_out[df_out["pullback_zone_score"] >= 7]
     vs_active   = df_out[df_out["vol_surge_label"] == "vol_surge_bull"]
     pb_list     = pb_active[["ticker", "pullback_zone_score", "pullback_label", "pullback_drop_pct"]].head(10).to_string(index=False)
@@ -571,17 +631,19 @@ def main():
     top5 = df_out.head(5)[[
         "ticker", "tech_total_score", "tech_detail_score",
         "vol_gap_score", "std_bar_score", "pullback_zone_score", "vol_surge_score",
-        "ma_label", "pullback_label"
+        "ma60_dir_score", "ma60_dir_label", "ma_label", "pullback_label"
     ]].to_string(index=False)
 
     logging.info(f"DONE | ok={ok_cnt} fail={fail_cnt} elapsed={elapsed}s")
     logging.info(f"TOP5:\n{top5}")
     logging.info(f"PULLBACK(score>=7, {len(pb_active)}건):\n{pb_list}")
     logging.info(f"[BM-10] 치량천 확정 ({len(vs_active)}건):\n{vs_list}")
-    print(f"[OK] tech_analyzer v1.3 | ok={ok_cnt} | fail={fail_cnt} | elapsed={elapsed}s")
+    logging.info(f"[BM-2] MA60_RISING: {len(ma60_rising)}건")
+    print(f"[OK] tech_analyzer v1.4 | ok={ok_cnt} | fail={fail_cnt} | elapsed={elapsed}s")
     print(f"  -> {OUTPUT_CSV}")
     print(f"  -> pullback_zone score>=7: {len(pb_active)}건")
     print(f"  -> [BM-10] vol_surge_bull: {len(vs_active)}건")
+    print(f"  -> [BM-2] MA60_RISING: {len(ma60_rising)}건")
 
 
 if __name__ == "__main__":
