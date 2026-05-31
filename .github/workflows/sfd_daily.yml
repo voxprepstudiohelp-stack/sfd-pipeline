@@ -1,18 +1,18 @@
 name: SFD Daily Pipeline
-# 파일위치(GitHub): sfd-pipeline/.github/workflows/sfd_daily.yml
-# V7.8.1 -> V7.8.2: signal_input cp 경로 수정 (prev_close_input -> prev_close_latest)
-# + inputs/sfd_naver_news_queries.csv repo 추가
+# ?�일?�치(GitHub): sfd-pipeline/.github/workflows/sfd_daily.yml
+# V7.8.1 -> V7.8.2: signal_input cp 경로 ?�정 (prev_close_input -> prev_close_latest)
+# + inputs/sfd_naver_news_queries.csv repo 추�?
 
 on:
   schedule:
-    # KST 08:35 = UTC 23:35 (전날 기준, 일~목)
+    # KST 08:35 = UTC 23:35 (?�날 기�?, ??�?
     - cron: '35 23 * * 0-4'
   workflow_dispatch:
 
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
 
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
@@ -53,60 +53,60 @@ jobs:
           cp portfolio.json /tmp/sfd/ || true
           cp inputs/sfd_naver_news_queries.csv /tmp/sfd/inputs/ || true
 
-      - name: Layer 1 — prev_close_fetch
+      - name: Layer 1 ??prev_close_fetch
         run: python tools/sfd_prev_close_fetch.py
 
       - name: Make signal_input from prev_close
         run: |
           cp /tmp/sfd/outputs/latest/sfd_prev_close_latest.csv \
              /tmp/sfd/inputs/sfd_master_signal_input.csv || true
-          echo "[OK] sfd_master_signal_input.csv 생성 완료"
+          echo "[OK] sfd_master_signal_input.csv ?�성 ?�료"
           ls -la /tmp/sfd/inputs/
 
-      - name: Layer 1.5 — news_fetcher
+      - name: Layer 1.5 ??news_fetcher
         run: python tools/sfd_news_fetcher.py
         continue-on-error: true
 
-      - name: Layer 1.6 — event_calendar_builder
+      - name: Layer 1.6 ??event_calendar_builder
         run: python tools/sfd_event_calendar_builder.py
         continue-on-error: true
 
-      - name: Layer 2.7 — technical_analyzer
+      - name: Layer 2.7 ??technical_analyzer
         run: python tools/sfd_technical_analyzer.py
         continue-on-error: true
 
-      - name: Layer 2.8 — oscillation_analyzer
+      - name: Layer 2.8 ??oscillation_analyzer
         run: python tools/sfd_oscillation_analyzer.py
         continue-on-error: true
 
-      - name: Layer 2 — signal_aggregator
+      - name: Layer 2 ??signal_aggregator
         run: python tools/sfd_signal_aggregator.py
 
-      - name: Layer 2.5 — rerating_watch
+      - name: Layer 2.5 ??rerating_watch
         run: python tools/sfd_rerating_watch.py
         continue-on-error: true
 
-      - name: Layer 2.6 — fundamental_watch
+      - name: Layer 2.6 ??fundamental_watch
         run: python tools/sfd_fundamental_watch.py
         continue-on-error: true
 
-      - name: Layer 2.6b — sector_injector
+      - name: Layer 2.6b ??sector_injector
         run: python tools/sfd_sector_injector.py
         continue-on-error: true
 
-      - name: Layer 3 — backtest_d1
+      - name: Layer 3 ??backtest_d1
         run: python tools/sfd_backtest_d1.py
         continue-on-error: true
 
-      - name: Layer 4 — finalize
+      - name: Layer 4 ??finalize
         run: python tools/sfd_finalize.py
         continue-on-error: true
 
-      - name: Layer 5 — portfolio_monitor
+      - name: Layer 5 ??portfolio_monitor
         run: python tools/sfd_portfolio_monitor.py
         continue-on-error: true
 
-      - name: Layer 5.5 — trade_guardian
+      - name: Layer 5.5 ??trade_guardian
         env:
           SFD_BASE_DIR: /tmp/sfd
         run: python sfd_trade_guardian.py
