@@ -170,7 +170,7 @@ def run():
         })
 
         if ok <= 20 or ok % 10 == 0:
-            print(f"  [{idx:3d}] ✅ {ticker} {name:12s} | PER={per} PBR={pbr} | {f_score:3d}pt")
+            print(f"  [{idx:3d}] ✅ {ticker} {(str(name) if isinstance(name, str) else ""):12s} | PER={per} PBR={pbr} | {f_score:3d}pt")
 
     print(f"\n{'='*60}")
     print(f"[결과] ✅{ok} | ❌{fail} | 커버리지 {ok/total*100:.1f}%")

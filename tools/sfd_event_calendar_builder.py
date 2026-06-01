@@ -214,6 +214,7 @@ def main():
             "event_grade", "event_name", "event_impact", "event_score",
             "event_time", "no_trade_start", "no_trade_end", "is_no_trade_now"
         ])
+        import os as _os; _os.makedirs(_os.path.dirname(_os.path.abspath(str(EVENT_OUT))), exist_ok=True)  # [PATCH v2.1]
         df_empty.to_csv(EVENT_OUT, index=False, encoding="utf-8-sig")
         summary = {"as_of_date": str(today), "total": 0, "HIGH": 0, "MID": 0, "LOW": 0, "events": []}
         SUMMARY_OUT.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
