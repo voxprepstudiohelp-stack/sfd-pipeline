@@ -343,7 +343,7 @@ def main():
         total    = t_score + n_score + i_score + th_score + f_score
         signal   = classify_signal(total)
 
-        name_row = input_df[input_df["ticker"] == ticker]
+        name_row = input_df[input_df[_tcol] == ticker]
         name     = name_row.iloc[0].get("name", "") if not name_row.empty else ""
 
         results.append({
@@ -388,4 +388,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
