@@ -368,7 +368,10 @@ def main():
             "vol_gap_score":   vg_score,
             "std_bar_score":   sb_score,
             "vol_gap_label":   vg_label,
-            "tech_ver":        tech_ver,
+            "tech_ver":            tech_ver,
+        "global_boost":        global_boost,
+        "global_trigger_src":  global_src,
+        "global_trigger_sig":  global_sig,
         })
 
     df_out = pd.DataFrame(results).sort_values("total_score", ascending=False).reset_index(drop=True)
