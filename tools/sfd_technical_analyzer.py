@@ -1,4 +1,4 @@
-# sfd_technical_analyzer.py | v1.4 | Layer 2.7 | Claude (Anthropic) 2026-05-31
+﻿# sfd_technical_analyzer.py | v1.4 | Layer 2.7 | Claude (Anthropic) 2026-05-31
 # Deploy to: sfd-pipeline/sfd_technical_analyzer.py
 #
 # [Layer 2.7] 기술적 분석 / 스코어링 / 기준봉 자동 탐지
@@ -577,9 +577,18 @@ def main():
         logging.error(f"INPUT_CSV not found: {INPUT_CSV}")
         sys.exit(1)
 
-    input_df = pd.read_csv(INPUT_CSV, encoding="utf-8-sig", dtype={"ticker": str})
+    input_df = pd.read_csv(INPUT_CSV, encoding="utf-8-sig", dtype=str)
+    # v1.5: ticker 컬럼명 유연 처리 (ticker / stock_code / 첫 번째 컬럼)
+    ticker_col = None
+    for _cand in ["ticker", "stock_code"]:
+        if _cand in input_df.columns:
+            ticker_col = _cand
+            break
+    if ticker_col is None:
+        ticker_col = input_df.columns[0]
+    logging.info(f"ticker_col: {ticker_col} | columns: {list(input_df.columns)}")
     tickers  = (
-        input_df["ticker"].dropna().astype(str)
+        input_df[ticker_col].dropna().astype(str)
         .str.strip().str.zfill(6).unique().tolist()
     )
     logging.info(f"tickers: {len(tickers)}")
@@ -648,3 +657,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
