@@ -1,11 +1,11 @@
 name: SFD Daily Pipeline
 # 파일위치(GitHub): sfd-pipeline/.github/workflows/sfd_daily.yml
-# V8.0 -> V8.1: Node.js 24 네이티브 업그레이드
+# V8.9: technical_analyzer v1.4 재배포 + verify 스텝 추가 + continue-on-error 제거
 # [변경사항]
-#   - actions/checkout@v4  -> actions/checkout@v6  (Node24 네이티브)
-#   - actions/setup-python@v5 -> actions/setup-python@v6 (Node24 네이티브)
-#   - FORCE_JAVASCRIPT_ACTIONS_TO_NODE24 env 제거 (네이티브 버전으로 불필요)
-# [이전 커밋 기준] 41eb505 (main, V8.0)
+# - tools/sfd_technical_analyzer.py: v1.2 -> v1.4 (BM-2 MA60 direction, tech max 93pt)
+# - Layer 2.7 continue-on-error: true 제거 (실패 시 즉시 중단)
+# - Verify technical output 스텝 추가 (L2.7 출력 파일 존재 확인)
+# [이전 커밋 기준] d5140db (main, V8.8)
 
 on:
   schedule:
@@ -77,7 +77,15 @@ jobs:
 
       - name: Layer 2.7 — technical_analyzer
         run: python tools/sfd_technical_analyzer.py
-        continue-on-error: true
+
+      - name: Verify technical output
+        run: |
+          if [ ! -f /tmp/sfd/outputs/latest/sfd_technical_latest.csv ]; then
+            echo "ERROR: sfd_technical_latest.csv not found after L2.7"
+            ls -la /tmp/sfd/outputs/latest/ || true
+            exit 1
+          fi
+          echo "OK: sfd_technical_latest.csv $(wc -l < /tmp/sfd/outputs/latest/sfd_technical_latest.csv) lines"
 
       - name: Layer 2.8 — oscillation_analyzer
         run: python tools/sfd_oscillation_analyzer.py
@@ -118,4 +126,3 @@ jobs:
 
       - name: Upload latest to Drive
         run: python utils/gdrive_uploader.py
-        continue-on-error: true
