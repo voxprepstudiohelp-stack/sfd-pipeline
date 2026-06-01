@@ -1,4 +1,4 @@
-# sfd_signal_aggregator.py | v2.4 | Claude (Anthropic) 2026-05-30
+﻿# sfd_signal_aggregator.py | v2.4 | Claude (Anthropic) 2026-05-30
 # Deploy to: D:\AI_WorkSpace\I_SFC\09_Implementation\SFC_DataPipeline\tools\sfd_signal_aggregator.py
 #
 # [v2.4 변경사항 — v2.3 대비 최소 수술]
@@ -291,7 +291,9 @@ def main():
     if "prev_value" in prev_df.columns:
         prev_df["prev_value"] = pd.to_numeric(prev_df["prev_value"], errors="coerce").fillna(0)
 
-    tickers = input_df["ticker"].dropna().astype(str).str.zfill(6).unique().tolist()
+    # v2.5: ticker 컬럼명 유연 처리 (ticker / stock_code / 첫 번째 컬럼)
+    _tcol = next((c for c in ["ticker","stock_code"] if c in input_df.columns), input_df.columns[0])
+    tickers = input_df[_tcol].dropna().astype(str).str.zfill(6).unique().tolist()
     logging.info(f"tickers: {len(tickers)}")
 
     results = []
@@ -386,3 +388,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
