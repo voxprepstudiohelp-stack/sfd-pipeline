@@ -1,11 +1,11 @@
-# sfd_technical_analyzer.py | v1.2 | Layer 2.7 | Claude (Anthropic) 2026-05-30
-# Deploy to: sfd-pipeline/tools/sfd_technical_analyzer.py
+# sfd_technical_analyzer.py | v1.4 | Layer 2.7 | Claude (Anthropic) 2026-05-31
+# Deploy to: sfd-pipeline/sfd_technical_analyzer.py
 #
 # [Layer 2.7] 기술적 분석 / 스코어링 / 기준봉 자동 탐지
 # 입력: inputs/sfd_master_signal_input.csv  (ticker 목록)
 # 출력: outputs/latest/sfd_technical_latest.csv
 #
-# [스코어 아키텍처] tech_total_score (max 75pt ★ v1.2)
+# [스코어 아키텍처] tech_total_score (max 93pt ★ v1.4)
 #   [A] Volume Profile / POC 점수        : 0~15pt  (v1.0 유지)
 #   [B] Support/Resistance 점수          : 0~10pt  (v1.0 유지)
 #   [C] RSI 포지션 (과매도)               : 0~5pt   (v1.0 유지)
@@ -13,14 +13,23 @@
 #   [E] Volume Gap Score (설거지 탐지)    : 0~15pt  ★ v1.1 추가
 #   [F] Standard Bar Score (기준봉 탐지)  : 0~10pt  ★ v1.1 추가
 #   [G] Pullback Zone Score (눌림목 탐지) : 0~10pt  ★ v1.2 신규
-#      합계 max = 75pt (기존 65pt → +10pt)
+#   [H] Volume Surge Score (치량천 탐지)  : 0~10pt  ★ v1.3 신규 BM-10
+#       합계 max = 85pt (기존 75pt → +10pt)
+#
+# [v1.3 변경사항]
+# - [H] vol_surge_score (치량천): Volume>Max20*1.5 AND 양봉 → +10pt (BM-10)
+# - tech_total_score max: 75pt → 85pt
+#
+# [v1.4 변경사항]
+# - [I] ma60_direction_score 추가: MA60 5봉 기울기 예측 → 0/2/5/8pt (BM-2)
+# - tech_total_score max: 85pt → 93pt
+#
+# [v1.3 변경사항]
+# - [H] vol_surge_score (치량천): Volume>Max20×1.5 AND 양봉 → +10pt (BM-10)
+# - tech_total_score max: 75pt → 85pt
 #
 # [v1.2 변경사항]
-#   - [G] pullback_zone_score 추가 (야베스 숏딥/턴딥 + 차트프로 AF F구간)
-#     * 1차 상승 후 5/10일선 사이 수렴 + 거래량 감소 구간 탐지
-#     * MA 정배열 유지 중 눌림목(-3%~-15%) 구간 집중 탐지
-#     * L5.5 trade_guardian JABEZ_PULLBACK 경보와 연동 (score >= 7)
-#   - tech_total_score max: 65pt → 75pt
+# - [G] pullback_zone_score 추가 (야베스 숏딥/턴딥 + 차트프로 AF F구간)
 
 import os
 import sys
@@ -52,9 +61,9 @@ INPUT_DIR   = os.path.join(BASE_DIR, "inputs")
 os.makedirs(LATEST_DIR,  exist_ok=True)
 os.makedirs(HISTORY_DIR, exist_ok=True)
 
-INPUT_CSV  = os.path.join(INPUT_DIR,   "sfd_master_signal_input.csv")
-OUTPUT_CSV = os.path.join(LATEST_DIR,  "sfd_technical_latest.csv")
-LOG_PATH   = os.path.join(LATEST_DIR,  "sfd_technical_analyzer.log")
+INPUT_CSV  = os.path.join(INPUT_DIR,  "sfd_master_signal_input.csv")
+OUTPUT_CSV = os.path.join(LATEST_DIR, "sfd_technical_latest.csv")
+LOG_PATH   = os.path.join(LATEST_DIR, "sfd_technical_analyzer.log")
 
 logging.basicConfig(
     handlers=[
@@ -67,27 +76,30 @@ logging.basicConfig(
 
 # ── 파라미터
 LOOKBACK_DAYS    = 60
-MA_PERIODS       = [5, 10, 20, 60, 120]   # ★ v1.2: MA10 추가 (눌림목 탐지용)
+MA_PERIODS       = [5, 10, 20, 60, 120]
 RSI_PERIOD       = 14
 VOL_BINS         = 20
 SWING_DISTANCE   = 5
 
-# [E] Volume Gap 파라미터
 VOL_GAP_BOTTOM_PCT = 0.20
 VOL_GAP_TOP_PCT    = 0.20
 
-# [F] Standard Bar 파라미터
 STD_BAR_BODY_PCT     = 0.03
 STD_BAR_VOL_MULT     = 1.5
 STD_BAR_BREAKOUT_WIN = 20
 STD_BAR_LOOKBACK     = 5
 
-# ★ [G] Pullback Zone 파라미터 (v1.2 신규)
-PB_LOOKBACK_HIGH    = 20   # 최근 N일 고점 탐색 구간
-PB_DROP_MIN_PCT     = 3.0  # 눌림목 최소 하락률 (고점 대비 -3%)
-PB_DROP_MAX_PCT     = 15.0 # 눌림목 최대 하락률 (고점 대비 -15%)
-PB_VOL_SHRINK_RATIO = 0.7  # 거래량 수축 기준 (5일 평균 < 20일 평균 * 0.7)
-PB_MA_ALIGN_REQ     = True # MA5 > MA20 정배열 필수 여부
+PB_LOOKBACK_HIGH    = 20
+PB_DROP_MIN_PCT     = 3.0
+PB_DROP_MAX_PCT     = 15.0
+PB_VOL_SHRINK_RATIO = 0.7
+PB_MA_ALIGN_REQ     = True
+
+# ★ [I] MA60 Direction 파라미터 (v1.4 신규 BM-2)
+MA60_DIR_LOOKBACK    = 5    # MA60 기울기 비교 봉수 (N봉 전 대비)
+MA60_DIR_RISING_STR  = 0.5  # 강한 상승 임계 (slope_pct >= +0.5%)
+MA60_DIR_RISING_MILD = 0.1  # 완만 상승 임계 (slope_pct >= +0.1%)
+MA60_DIR_FLAT_LOW    = -0.1 # 수평 하한 임계 (slope_pct >= -0.1%)
 
 START_TIME = time.time()
 
@@ -114,8 +126,8 @@ def calc_poc_score(df: pd.DataFrame) -> tuple:
         poc_price = (bins[poc_bin] + bins[poc_bin + 1]) / 2
         pct_diff  = (current - poc_price) / poc_price * 100
 
-        if pct_diff >= 3.0:   score = 15
-        elif pct_diff >= 1.0: score = 12
+        if pct_diff >= 3.0:    score = 15
+        elif pct_diff >= 1.0:  score = 12
         elif pct_diff >= -1.0: score = 8
         elif pct_diff >= -5.0: score = 3
         else:                  score = 0
@@ -150,8 +162,8 @@ def calc_sr_score(df: pd.DataFrame) -> tuple:
         nearest_support = supports_below.max()
         gap_pct = (current - nearest_support) / nearest_support * 100
 
-        if gap_pct <= 2.0:   score = 10
-        elif gap_pct <= 5.0: score = 7
+        if gap_pct <= 2.0:    score = 10
+        elif gap_pct <= 5.0:  score = 7
         elif gap_pct <= 10.0: score = 4
         else:                 score = 1
 
@@ -161,7 +173,7 @@ def calc_sr_score(df: pd.DataFrame) -> tuple:
         return 0, 0.0, 0.0
 
 
-# ── [C] RSI 점수 (0~5) ───────────────────────────────────────────────────────
+# ── [C] RSI 점수 (0~5) ──────────────────────────────────────────────────────
 def calc_rsi(series: pd.Series, period: int = 14) -> float:
     delta    = series.diff()
     gain     = delta.clip(lower=0)
@@ -194,8 +206,8 @@ def calc_ma_score(df: pd.DataFrame) -> tuple:
 
         if ma120 is not None and not pd.isna(ma120):
             if ma5 > ma20 > ma60 > ma120: return 10, "full_bull"
-            if ma5 > ma20 > ma60:         return 7, "3ma_bull"
-            if ma5 > ma20:                return 3, "2ma_bull"
+            if ma5 > ma20 > ma60:         return 7,  "3ma_bull"
+            if ma5 > ma20:                return 3,  "2ma_bull"
         else:
             if ma5 > ma20 > ma60: return 7, "3ma_bull"
             if ma5 > ma20:        return 3, "2ma_bull"
@@ -236,7 +248,6 @@ def calc_volume_gap_score(df: pd.DataFrame) -> tuple:
         elif vol_gap_ratio >= 1.5: score, label = 10, "healthy_mid"
         else:                      score, label = 15, "healthy_strong"
 
-        # 추가 보정: 바닥 30% 구간에서 축적 시 가점
         current  = close[-1]
         base_pct = (current - price_20pct) / (price_80pct - price_20pct + 1e-9) * 100
         if 0 <= base_pct <= 30 and score >= 10:
@@ -249,7 +260,7 @@ def calc_volume_gap_score(df: pd.DataFrame) -> tuple:
         return 0, 0.0, "error"
 
 
-# ── [F] Standard Bar Score (0~10) ★ v1.1 ────────────────────────────────────
+# ── [F] Standard Bar Score (0~10) ★ v1.1 ───────────────────────────────────
 def calc_standard_bar_score(df: pd.DataFrame) -> tuple:
     try:
         if len(df) < STD_BAR_BREAKOUT_WIN + STD_BAR_LOOKBACK + 5:
@@ -308,18 +319,10 @@ def calc_standard_bar_score(df: pd.DataFrame) -> tuple:
         return 0, 0, -1
 
 
-# ── [G] Pullback Zone Score (0~10) ★ v1.2 신규 ──────────────────────────────
+# ── [G] Pullback Zone Score (0~10) ★ v1.2 ───────────────────────────────────
 def calc_pullback_zone_score(df: pd.DataFrame) -> tuple:
     """
-    [야베스 숏딥/턴딥 눌림목 탐지]
-
-    눌림목 정의 (5가지 조건 복합 평가):
-      조건1. 최근 N일 고점 대비 현재가 -3% ~ -15% 구간 (눌림 깊이)
-      조건2. MA5 > MA20 정배열 유지 (상승추세 중 눌림)
-      조건3. MA5와 MA10 사이에 현재가 위치 (단기 이평 수렴 구간)
-      조건4. 최근 5일 거래량 평균 < 20일 평균 * 0.7 (거래량 수축)
-      조건5. MA5 기울기 완화 (수렴 중) = |MA5 - MA5_3일전| / MA5 < 2%
-
+    야베스 숏딥/턴딥 눌림목 탐지 (5조건 복합)
     Returns: (score 0~10, pb_drop_pct, conditions_met, pb_label)
     """
     try:
@@ -332,7 +335,6 @@ def calc_pullback_zone_score(df: pd.DataFrame) -> tuple:
 
         current = close[-1]
 
-        # MA 계산
         ma5  = pd.Series(close).rolling(5).mean().values
         ma10 = pd.Series(close).rolling(10).mean().values
         ma20 = pd.Series(close).rolling(20).mean().values
@@ -344,56 +346,40 @@ def calc_pullback_zone_score(df: pd.DataFrame) -> tuple:
         if pd.isna(ma5_cur) or pd.isna(ma10_cur) or pd.isna(ma20_cur):
             return 0, 0.0, 0, "ma_insufficient"
 
-        # 최근 N일 고점
         lookback_window = min(PB_LOOKBACK_HIGH, n - 1)
-        recent_high = close[-lookback_window - 1: -1].max()  # 현재가 제외 고점
+        recent_high = close[-lookback_window - 1: -1].max()
 
         if recent_high <= 0:
             return 0, 0.0, 0, "no_high"
 
         pb_drop_pct = (recent_high - current) / recent_high * 100
-
-        # 조건1: 눌림 깊이 체크
         cond1 = PB_DROP_MIN_PCT <= pb_drop_pct <= PB_DROP_MAX_PCT
-
-        # 조건2: MA 정배열 (MA5 > MA20)
         cond2 = bool(ma5_cur > ma20_cur)
 
-        # 조건3: 현재가가 MA5 ~ MA10 사이 (단기 이평 수렴 구간)
-        # 또는 MA10 ~ MA20 사이 (좀 더 깊은 눌림)
         in_ma5_ma10  = min(ma5_cur, ma10_cur) <= current <= max(ma5_cur, ma10_cur)
         in_ma10_ma20 = min(ma10_cur, ma20_cur) <= current <= max(ma10_cur, ma20_cur)
         cond3 = in_ma5_ma10 or in_ma10_ma20
 
-        # 조건4: 거래량 수축 (최근 5일 평균 < 20일 평균 * 0.7)
         vol_5d  = np.mean(volume[-5:])  if n >= 5  else np.mean(volume)
         vol_20d = np.mean(volume[-20:]) if n >= 20 else np.mean(volume)
         cond4 = bool(vol_5d < vol_20d * PB_VOL_SHRINK_RATIO) if vol_20d > 0 else False
 
-        # 조건5: MA5 기울기 완화 (수렴 징후)
         ma5_3d_ago = ma5[-4] if n >= 4 and not pd.isna(ma5[-4]) else ma5_cur
         ma5_slope_pct = abs(ma5_cur - ma5_3d_ago) / (ma5_cur + 1e-9) * 100
-        cond5 = ma5_slope_pct < 2.0  # MA5 기울기 2% 미만 → 수렴 중
+        cond5 = ma5_slope_pct < 2.0
 
         conds_met = sum([cond1, cond2, cond3, cond4, cond5])
 
-        # 점수 산정
         if not cond1:
-            # 눌림 범위 벗어남 → 기본 0점 (단, 가까우면 소점수)
-            if pb_drop_pct < PB_DROP_MIN_PCT:
-                label = "too_shallow"   # 고점 근처
-            else:
-                label = "too_deep"      # 하락 과다
+            label = "too_shallow" if pb_drop_pct < PB_DROP_MIN_PCT else "too_deep"
             return 0, round(pb_drop_pct, 2), conds_met, label
 
-        # 눌림 구간 내 → 조건 수에 따라 점수
         if conds_met >= 5:   score, label = 10, "perfect_pullback"
         elif conds_met == 4: score, label = 8,  "strong_pullback"
         elif conds_met == 3: score, label = 6,  "mild_pullback"
         elif conds_met == 2: score, label = 3,  "weak_pullback"
         else:                score, label = 1,  "possible_pullback"
 
-        # 추가 보정: MA5~MA10 사이 수렴 + 거래량 수축 동시 만족 시 +1
         if in_ma5_ma10 and cond4 and score < 10:
             score = min(score + 1, 10)
             label += "_confirmed"
@@ -405,7 +391,88 @@ def calc_pullback_zone_score(df: pd.DataFrame) -> tuple:
         return 0, 0.0, 0, "error"
 
 
-# ── OHLCV 수집 ────────────────────────────────────────────────────────────────
+# ── [H] Volume Surge Score (치량천) (0~10) ★ v1.3 BM-10 ────────────────────
+def calc_volume_surge_score(df: pd.DataFrame) -> tuple:
+    """
+    [BM-10] 치량천: 당일 거래량 > 최근 20일 최대 거래량 * 1.5 AND 양봉
+      cond1: volume[-1] / max(volume[-21:-1]) >= 1.5
+      cond2: close[-1] > open[-1]  (양봉)
+    점수:
+      cond1+cond2: +10pt  (vol_surge_bull — 치량천 확정)
+      cond1 only:   +5pt  (vol_surge_bear — 거래량 급증, 방향 불확실)
+      미충족:         0pt  (normal)
+    """
+    try:
+        if len(df) < 22:
+            return 0, 0.0, "insufficient"
+
+        close  = df["Close"].values
+        open_  = df["Open"].values
+        volume = df["Volume"].values
+
+        current_vol = volume[-1]
+        max_vol_20d = volume[-21:-1].max()
+
+        if max_vol_20d == 0:
+            return 0, 0.0, "no_volume"
+
+        vol_ratio = round(current_vol / max_vol_20d, 4)
+        cond1 = vol_ratio >= 1.5
+        cond2 = bool(close[-1] > open_[-1])
+
+        if cond1 and cond2:
+            return 10, vol_ratio, "vol_surge_bull"
+        elif cond1:
+            return 5,  vol_ratio, "vol_surge_bear"
+        else:
+            return 0,  vol_ratio, "normal"
+
+    except Exception as e:
+        logging.debug(f"volume_surge_score error: {e}")
+        return 0, 0.0, "error"
+
+
+# ── [I] MA60 Direction Score (0~8) ★ v1.4 BM-2 ──────────────────────────────────
+def calc_ma60_direction_score(df: pd.DataFrame) -> tuple:
+    """
+    [BM-2] MA60 기울기 방향 예측: N봉 전 MA60 대비 현재 MA60 기울기(slope_pct) 계산
+      slope_pct >= +0.5% → score=8, label="MA60_RISING"      (강한 상승 추세)
+      slope_pct >= +0.1% → score=5, label="MA60_MILD_RISE"   (완만 상승)
+      slope_pct >= -0.1% → score=2, label="MA60_FLAT"        (수평 — 관망)
+      slope_pct <  -0.1% → score=0, label="MA60_DECLINING"   (하락)
+    Returns: (score 0~8, slope_pct, label)
+    """
+    try:
+        min_len = 60 + MA60_DIR_LOOKBACK + 1
+        if len(df) < min_len:
+            return 0, 0.0, "insufficient"
+
+        close = df["Close"]
+        ma60_series = close.rolling(60).mean()
+
+        ma60_cur  = ma60_series.iloc[-1]
+        ma60_prev = ma60_series.iloc[-(MA60_DIR_LOOKBACK + 1)]
+
+        if pd.isna(ma60_cur) or pd.isna(ma60_prev) or ma60_prev == 0:
+            return 0, 0.0, "ma60_insufficient"
+
+        slope_pct = round((ma60_cur - ma60_prev) / ma60_prev * 100, 4)
+
+        if slope_pct >= MA60_DIR_RISING_STR:
+            return 8, slope_pct, "MA60_RISING"
+        elif slope_pct >= MA60_DIR_RISING_MILD:
+            return 5, slope_pct, "MA60_MILD_RISE"
+        elif slope_pct >= MA60_DIR_FLAT_LOW:
+            return 2, slope_pct, "MA60_FLAT"
+        else:
+            return 0, slope_pct, "MA60_DECLINING"
+
+    except Exception as e:
+        logging.debug(f"ma60_direction_score error: {e}")
+        return 0, 0.0, "error"
+
+
+# ── OHLCV 취득 ──────────────────────────────────────────────────────────
 def fetch_ohlcv(ticker: str, end_date: datetime) -> pd.DataFrame | None:
     try:
         start = (end_date - timedelta(days=LOOKBACK_DAYS * 2)).strftime("%Y-%m-%d")
@@ -443,59 +510,68 @@ def analyze_ticker(ticker: str, end_date: datetime) -> dict | None:
         return None
 
     try:
-        poc_score,   poc_price,    poc_pct      = calc_poc_score(df)
-        sr_score,    sr_support,   sr_gap        = calc_sr_score(df)
-        rsi_val                                   = calc_rsi(df["Close"])
-        rsi_score                                 = calc_rsi_score(rsi_val)
-        ma_score,    ma_label                     = calc_ma_score(df)
-        vg_score,    vol_gap_ratio, vg_label      = calc_volume_gap_score(df)
-        sb_score,    sb_conds,      sb_bar_idx    = calc_standard_bar_score(df)
-        # ★ v1.2 신규
-        pb_score,    pb_drop_pct,   pb_conds, pb_label = calc_pullback_zone_score(df)
+        poc_score,  poc_price,     poc_pct              = calc_poc_score(df)
+        sr_score,   sr_support,    sr_gap                = calc_sr_score(df)
+        rsi_val                                           = calc_rsi(df["Close"])
+        rsi_score                                         = calc_rsi_score(rsi_val)
+        ma_score,   ma_label                              = calc_ma_score(df)
+        vg_score,   vol_gap_ratio, vg_label               = calc_volume_gap_score(df)
+        sb_score,   sb_conds,      sb_bar_idx = calc_standard_bar_score(df)
+        pb_score,   pb_drop_pct,   pb_conds,  pb_label    = calc_pullback_zone_score(df)
+        vs_score,   vol_surge_ratio, vs_label             = calc_volume_surge_score(df)  # ★ BM-10
+        ma60_dir_score, ma60_slope_pct, ma60_dir_label   = calc_ma60_direction_score(df)  # ★ BM-2
 
-        tech_detail_score = poc_score + sr_score + rsi_score + ma_score   # max 40 (v1.0 호환)
-        tech_total_score  = tech_detail_score + vg_score + sb_score + pb_score  # ★ max 75
+        tech_detail_score = poc_score + sr_score + rsi_score + ma_score         # max 40
+        tech_total_score  = tech_detail_score + vg_score + sb_score + pb_score + vs_score + ma60_dir_score  # ★ max 93
 
         return {
-            "ticker":             ticker.zfill(6),
-            # ── v1.0 컬럼 (signal_aggregator 호환) ──────────────────────────
-            "poc_score":          poc_score,
-            "poc_price":          poc_price,
-            "poc_pct":            poc_pct,
-            "sr_score":           sr_score,
-            "sr_support":         sr_support,
-            "sr_gap_pct":         sr_gap,
-            "rsi_score":          rsi_score,
-            "rsi":                rsi_val,
-            "ma_score":           ma_score,
-            "ma_label":           ma_label,
-            "tech_detail_score":  tech_detail_score,   # max=40 (aggregator 호환)
-            # ── v1.1 컬럼 ───────────────────────────────────────────────────
-            "vol_gap_score":      vg_score,
-            "vol_gap_ratio":      vol_gap_ratio,
-            "vol_gap_label":      vg_label,
-            "std_bar_score":      sb_score,
-            "std_bar_conds":      sb_conds,
-            "std_bar_recency":    sb_bar_idx,
-            # ── v1.2 컬럼 (신규) ────────────────────────────────────────────
-            "pullback_zone_score": pb_score,           # ★ 0~10 (guardian 연동)
-            "pullback_drop_pct":   pb_drop_pct,        # ★ 고점 대비 하락률
-            "pullback_conds":      pb_conds,            # ★ 만족 조건 수
-            "pullback_label":      pb_label,            # ★ 눌림목 유형
+            "ticker":              ticker.zfill(6),
+            # ── v1.0 컬럼 ──────────────────────────────────────────────────
+            "poc_score":           poc_score,
+            "poc_price":           poc_price,
+            "poc_pct":             poc_pct,
+            "sr_score":            sr_score,
+            "sr_support":          sr_support,
+            "sr_gap_pct":          sr_gap,
+            "rsi_score":           rsi_score,
+            "rsi":                 rsi_val,
+            "ma_score":            ma_score,
+            "ma_label":            ma_label,
+            "tech_detail_score":   tech_detail_score,
+            # ── v1.1 컬럼 ──────────────────────────────────────────────────
+            "vol_gap_score":       vg_score,
+            "vol_gap_ratio":       vol_gap_ratio,
+            "vol_gap_label":       vg_label,
+            "std_bar_score":       sb_score,
+            "std_bar_conds":       sb_conds,
+            "std_bar_recency":     sb_bar_idx,
+            # ── v1.2 컬럼 ──────────────────────────────────────────────────
+            "pullback_zone_score": pb_score,
+            "pullback_drop_pct":   pb_drop_pct,
+            "pullback_conds":      pb_conds,
+            "pullback_label":      pb_label,
+            # ── v1.3 컬럼 [H] 치량천 BM-10 ★ ──────────────────────────────
+            "vol_surge_score":     vs_score,
+            "vol_surge_ratio":     vol_surge_ratio,
+            "vol_surge_label":     vs_label,
+            # ── v1.4 신규 [I] MA60 Direction BM-2 ★ ──────────────────────────
+            "ma60_dir_score":      ma60_dir_score,
+            "ma60_slope_pct":      ma60_slope_pct,
+            "ma60_dir_label":      ma60_dir_label,
             # ── 합산 ────────────────────────────────────────────────────────
-            "tech_total_score":   tech_total_score,    # ★ max=75
+            "tech_total_score":    tech_total_score,
         }
     except Exception as e:
         logging.debug(f"analyze_ticker {ticker} error: {e}")
         return None
 
 
-# ── MAIN ─────────────────────────────────────────────────────────────────────
+# ── MAIN ──────────────────────────────────────────────────────────────────────
 def main():
-    logging.info("=== sfd_technical_analyzer v1.2 START ===")
+    logging.info("=== sfd_technical_analyzer v1.4 START ===")
     logging.info(f"BASE_DIR:  {BASE_DIR}")
     logging.info(f"SCIPY:     {SCIPY_AVAILABLE}")
-    logging.info("SCORE MAX: v1.0=40pt / v1.1=65pt / v1.2 total=75pt (+pullback_zone)")
+    logging.info("SCORE MAX: v1.0=40pt / v1.1=65pt / v1.2=75pt / v1.3=85pt / v1.4 total=93pt (+MA60_DIR BM-2)")
 
     if not os.path.exists(INPUT_CSV):
         logging.error(f"INPUT_CSV not found: {INPUT_CSV}")
@@ -546,22 +622,28 @@ def main():
 
     elapsed = int(time.time() - START_TIME)
 
-    # 눌림목 탐지 현황 로그
-    pb_active = df_out[df_out["pullback_zone_score"] >= 7]
-    pb_list   = pb_active[["ticker", "pullback_zone_score", "pullback_label", "pullback_drop_pct"]].head(10).to_string(index=False)
+    ma60_rising = df_out[df_out["ma60_dir_label"] == "MA60_RISING"]
+    pb_active   = df_out[df_out["pullback_zone_score"] >= 7]
+    vs_active   = df_out[df_out["vol_surge_label"] == "vol_surge_bull"]
+    pb_list     = pb_active[["ticker", "pullback_zone_score", "pullback_label", "pullback_drop_pct"]].head(10).to_string(index=False)
+    vs_list     = vs_active[["ticker", "vol_surge_score", "vol_surge_ratio"]].head(10).to_string(index=False)
 
     top5 = df_out.head(5)[[
         "ticker", "tech_total_score", "tech_detail_score",
-        "vol_gap_score", "std_bar_score", "pullback_zone_score",
-        "ma_label", "pullback_label"
+        "vol_gap_score", "std_bar_score", "pullback_zone_score", "vol_surge_score",
+        "ma60_dir_score", "ma60_dir_label", "ma_label", "pullback_label"
     ]].to_string(index=False)
 
     logging.info(f"DONE | ok={ok_cnt} fail={fail_cnt} elapsed={elapsed}s")
     logging.info(f"TOP5:\n{top5}")
     logging.info(f"PULLBACK(score>=7, {len(pb_active)}건):\n{pb_list}")
-    print(f"[OK] tech_analyzer v1.2 | ok={ok_cnt} | fail={fail_cnt} | elapsed={elapsed}s")
+    logging.info(f"[BM-10] 치량천 확정 ({len(vs_active)}건):\n{vs_list}")
+    logging.info(f"[BM-2] MA60_RISING: {len(ma60_rising)}건")
+    print(f"[OK] tech_analyzer v1.4 | ok={ok_cnt} | fail={fail_cnt} | elapsed={elapsed}s")
     print(f"  -> {OUTPUT_CSV}")
     print(f"  -> pullback_zone score>=7: {len(pb_active)}건")
+    print(f"  -> [BM-10] vol_surge_bull: {len(vs_active)}건")
+    print(f"  -> [BM-2] MA60_RISING: {len(ma60_rising)}건")
 
 
 if __name__ == "__main__":
