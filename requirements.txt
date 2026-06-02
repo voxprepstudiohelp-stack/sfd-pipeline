@@ -27,4 +27,3 @@ google-api-python-client>=2.100.0
 # ── Utility ────────────────────────────────
 python-dateutil>=2.8.0
 pytz>=2023.3
-FinanceDataReader>=0.9.50 
