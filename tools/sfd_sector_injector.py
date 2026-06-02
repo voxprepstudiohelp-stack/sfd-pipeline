@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 sfd_sector_injector.py  v1.4
 역할: sfd_fundamental_watch.py 출력에 sector_major + adjusted_fund_score 주입
@@ -24,7 +24,7 @@ _BASE = os.environ.get(
 MASTER = os.path.join(_BASE, "data", "sfd_company_master_v1.4_sector_filled.csv")
 
 # FUND CSV: outputs/latest/ (파이프라인 런타임 생성)
-FUND_CSV = os.path.join(_BASE, "outputs", "latest", "sfd_fundamental_latest.csv")
+FUND_CSV = os.path.join(_BASE, "outputs", "latest", "sfd_fundamental_watch_latest.csv")
 
 # ──────────────────────────────────────────────────────────────
 # sector 우선순위 정의

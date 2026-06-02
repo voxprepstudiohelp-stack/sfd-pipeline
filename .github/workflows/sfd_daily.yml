@@ -1,11 +1,14 @@
 name: SFD Daily Pipeline
 # 파일위치(GitHub): sfd-pipeline/.github/workflows/sfd_daily.yml
-# V9.2: Layer -2 MACRO_RADAR v1.0 추가 + Signal Aggregator v3.1 (max 225pt)
-# [변경사항]
-# - tools/sfd_macro_radar.py: 신규 (글로벌 매크로 → 섹터 부스트 ±15pt)
-# - tools/sfd_signal_aggregator.py: v3.0 -> v3.1 (L-2 매크로 부스트 통합, max 225pt)
-# - requirements.txt: Lean v2.0 (불필요 패키지 6종 제거)
-# [이전 커밋 기준] cf493e8 (main, V9.1)
+# V10.0 | 2026-06-03 | Claude Sonnet 4.6
+#
+# [V9.4 → V10.0 변경사항]
+# ① Layer 0.5 — global_trigger 스텝 추가 (signal_aggregator 이전에 실행)
+# ② Layer -2 — macro_radar 스텝 추가 (global_trigger 이전에 실행)
+#    → signal_aggregator Warning "CSV not found" 완전 해소
+# ③ fundamental_watch v1.6 반영: 출력 sfd_fundamental_watch_latest.csv
+# ④ THRESHOLD: RESERVE_BUY=55 / WATCH_ONLY=40 (signal_aggregator v3.2)
+# ⑤ sector_injector: FUND CSV 경로 sfd_fundamental_watch_latest.csv 로 맞춤
 
 on:
   schedule:
@@ -21,18 +24,18 @@ jobs:
     env:
       # ── Secrets ──
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-      GDRIVE_LATEST_FOLDER_ID: ${{ secrets.GDRIVE_LATEST_FOLDER_ID }}
-      GDRIVE_HISTORY_FOLDER_ID: ${{ secrets.GDRIVE_HISTORY_FOLDER_ID }}
-      GDRIVE_INPUT_FOLDER_ID: ${{ secrets.GDRIVE_INPUT_FOLDER_ID }}
-      GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
-      GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
-      GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
-      KIS_APP_KEY: ${{ secrets.KIS_APP_KEY }}
-      KIS_APP_SECRET: ${{ secrets.KIS_APP_SECRET }}
-      KIS_ACCOUNT_NO: ${{ secrets.KIS_ACCOUNT_NO }}
-      DART_API_KEY: ${{ secrets.DART_API_KEY }}
-      NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
-      NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+      GDRIVE_LATEST_FOLDER_ID:     ${{ secrets.GDRIVE_LATEST_FOLDER_ID }}
+      GDRIVE_HISTORY_FOLDER_ID:    ${{ secrets.GDRIVE_HISTORY_FOLDER_ID }}
+      GDRIVE_INPUT_FOLDER_ID:      ${{ secrets.GDRIVE_INPUT_FOLDER_ID }}
+      GDRIVE_CLIENT_ID:            ${{ secrets.GDRIVE_CLIENT_ID }}
+      GDRIVE_CLIENT_SECRET:        ${{ secrets.GDRIVE_CLIENT_SECRET }}
+      GDRIVE_REFRESH_TOKEN:        ${{ secrets.GDRIVE_REFRESH_TOKEN }}
+      KIS_APP_KEY:                 ${{ secrets.KIS_APP_KEY }}
+      KIS_APP_SECRET:              ${{ secrets.KIS_APP_SECRET }}
+      KIS_ACCOUNT_NO:              ${{ secrets.KIS_ACCOUNT_NO }}
+      DART_API_KEY:                ${{ secrets.DART_API_KEY }}
+      NAVER_CLIENT_ID:             ${{ secrets.NAVER_CLIENT_ID }}
+      NAVER_CLIENT_SECRET:         ${{ secrets.NAVER_CLIENT_SECRET }}
       SFD_BASE_DIR: /tmp/sfd
 
     steps:
@@ -52,15 +55,22 @@ jobs:
         run: |
           mkdir -p /tmp/sfd/outputs/latest /tmp/sfd/outputs/history /tmp/sfd/inputs /tmp/sfd/data
           cp data/sfd_company_master_v1.4_sector_filled.csv /tmp/sfd/data/ || true
-          cp portfolio.json /tmp/sfd/data/ || true
-          cp portfolio.json /tmp/sfd/outputs/latest/ || true
-          cp portfolio.json /tmp/sfd/ || true
+          cp portfolio.json /tmp/sfd/data/             || true
+          cp portfolio.json /tmp/sfd/outputs/latest/   || true
+          cp portfolio.json /tmp/sfd/                  || true
           cp inputs/sfd_naver_news_queries.csv /tmp/sfd/inputs/ || true
 
+      # ── [NEW V10.0] Layer -2: MACRO RADAR ─────────────────────────────
       - name: "Layer -2: MACRO RADAR"
         run: python tools/sfd_macro_radar.py
         continue-on-error: true
 
+      # ── [NEW V10.0] Layer 0.5: GLOBAL TRIGGER ─────────────────────────
+      - name: "Layer 0.5: GLOBAL TRIGGER"
+        run: python tools/sfd_global_trigger.py
+        continue-on-error: true
+
+      # ── Layer 1 ────────────────────────────────────────────────────────
       - name: Layer 1 — prev_close_fetch
         run: python tools/sfd_prev_close_fetch.py
 
@@ -95,6 +105,7 @@ jobs:
         run: python tools/sfd_oscillation_analyzer.py
         continue-on-error: true
 
+      # ── Layer 2: signal_aggregator (global/macro CSV 이미 생성됨) ─────
       - name: Layer 2 — signal_aggregator
         run: python tools/sfd_signal_aggregator.py
 
@@ -102,6 +113,7 @@ jobs:
         run: python tools/sfd_rerating_watch.py
         continue-on-error: true
 
+      # ── [V1.6] Layer 2.6: fundamental_watch ───────────────────────────
       - name: Layer 2.6 — fundamental_watch
         run: python tools/sfd_fundamental_watch.py
         continue-on-error: true
