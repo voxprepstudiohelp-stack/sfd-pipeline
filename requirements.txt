@@ -8,6 +8,7 @@ numpy>=1.24.0
 
 # ── Market Data (Layer -2, 0.5) ────────────
 yfinance>=0.2.30
+FinanceDataReader>=0.9.50
 
 # ── HTTP / Crawling (Layer 1, 1.5, 1.6) ───
 requests>=2.30.0
@@ -26,3 +27,4 @@ google-api-python-client>=2.100.0
 # ── Utility ────────────────────────────────
 python-dateutil>=2.8.0
 pytz>=2023.3
+FinanceDataReader>=0.9.50 
