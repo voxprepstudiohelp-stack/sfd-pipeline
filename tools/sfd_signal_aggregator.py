@@ -204,7 +204,7 @@ def aggregate_signals(inputs, global_trigger_map, macro_boost_map):
     master = master[col_order]
     master.sort_values("score", ascending=False, inplace=True)
     logger.info(f"✓ Aggregated {len(master)} signals")
-    logger.info(f"  RESERVE_BUY: {len(master[moster['signal']=='RESERVE_BUY'])}")
+    logger.info(f"  RESERVE_BUY: {len(master[master['signal']=='RESERVE_BUY'])}")
     logger.info(f"  WATCH_ONLY: {len(master[master['signal']=='WATCH_ONLY'])}")
     return master
 
