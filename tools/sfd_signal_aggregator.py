@@ -25,13 +25,13 @@ import numpy as np
 
 
 # ===== CONFIG =====
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.environ.get("SFD_BASE_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 OUTPUTS_DIR = os.path.join(BASE_DIR, "outputs", "latest")
 os.makedirs(OUTPUTS_DIR, exist_ok=True)
 
 
 # 입력 파일 경로 (Layer 1~2.6 아웃풋)
-TECH_CSV = os.path.join(OUTPUTS_DIR, "sfd_technical_analysis_latest.csv")
+TECH_CSV = os.path.join(OUTPUTS_DIR, "sfd_technical_latest.csv")
 NEWS_CSV = os.path.join(OUTPUTS_DIR, "sfd_news_sentiment_latest.csv")
 INVESTOR_CSV = os.path.join(OUTPUTS_DIR, "sfd_investor_flow_latest.csv")
 THEME_CSV = os.path.join(OUTPUTS_DIR, "sfd_theme_score_latest.csv")
