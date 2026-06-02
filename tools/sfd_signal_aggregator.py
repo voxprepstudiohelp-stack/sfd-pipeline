@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 SFD Signal Aggregator v3.2
@@ -31,7 +31,7 @@ os.makedirs(OUTPUTS_DIR, exist_ok=True)
 
 
 # 입력 파일 경로 (Layer 1~2.6 아웃풋)
-TECH_CSV = os.path.join(OUTPUTS_DIR, "sfd_technical_analysis_latest.csv")
+TECH_CSV = os.path.join(OUTPUTS_DIR, "sfd_technical_latest.csv")
 NEWS_CSV = os.path.join(OUTPUTS_DIR, "sfd_news_sentiment_latest.csv")
 INVESTOR_CSV = os.path.join(OUTPUTS_DIR, "sfd_investor_flow_latest.csv")
 THEME_CSV = os.path.join(OUTPUTS_DIR, "sfd_theme_score_latest.csv")
