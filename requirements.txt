@@ -1,11 +1,28 @@
-finance-datareader
-yfinance
-pandas
-numpy
-requests
-google-auth
-google-auth-httplib2
-google-api-python-client
-python-dotenv
-beautifulsoup4
-scipy
+# SFD Pipeline Requirements (Lean v2.0)
+# Layer -2 ~ Layer 5.5 실제 사용 패키지만 포함
+# 생성: Claude Sonnet 4.6 | 2026-06-02
+
+# ── Core Data ──────────────────────────────
+pandas>=1.5.0
+numpy>=1.24.0
+
+# ── Market Data (Layer -2, 0.5) ────────────
+yfinance>=0.2.30
+
+# ── HTTP / Crawling (Layer 1, 1.5, 1.6) ───
+requests>=2.30.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+
+# ── Env / Config ───────────────────────────
+python-dotenv>=1.0.0
+
+# ── Google Drive Upload (sfd_finalize) ─────
+google-auth>=2.25.0
+google-auth-oauthlib>=1.2.0
+google-auth-httplib2>=0.2.0
+google-api-python-client>=2.100.0
+
+# ── Utility ────────────────────────────────
+python-dateutil>=2.8.0
+pytz>=2023.3
