@@ -1,11 +1,11 @@
 name: SFD Daily Pipeline
 # 파일위치(GitHub): sfd-pipeline/.github/workflows/sfd_daily.yml
-# V8.9: technical_analyzer v1.4 재배포 + verify 스텝 추가 + continue-on-error 제거
+# V9.2: Layer -2 MACRO_RADAR v1.0 추가 + Signal Aggregator v3.1 (max 225pt)
 # [변경사항]
-# - tools/sfd_technical_analyzer.py: v1.2 -> v1.4 (BM-2 MA60 direction, tech max 93pt)
-# - Layer 2.7 continue-on-error: true 제거 (실패 시 즉시 중단)
-# - Verify technical output 스텝 추가 (L2.7 출력 파일 존재 확인)
-# [이전 커밋 기준] d5140db (main, V8.8)
+# - tools/sfd_macro_radar.py: 신규 (글로벌 매크로 → 섹터 부스트 ±15pt)
+# - tools/sfd_signal_aggregator.py: v3.0 -> v3.1 (L-2 매크로 부스트 통합, max 225pt)
+# - requirements.txt: Lean v2.0 (불필요 패키지 6종 제거)
+# [이전 커밋 기준] cf493e8 (main, V9.1)
 
 on:
   schedule:
@@ -56,6 +56,10 @@ jobs:
           cp portfolio.json /tmp/sfd/outputs/latest/ || true
           cp portfolio.json /tmp/sfd/ || true
           cp inputs/sfd_naver_news_queries.csv /tmp/sfd/inputs/ || true
+
+      - name: "Layer -2: MACRO RADAR"
+        run: python tools/sfd_macro_radar.py
+        continue-on-error: true
 
       - name: Layer 1 — prev_close_fetch
         run: python tools/sfd_prev_close_fetch.py
