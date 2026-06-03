@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-SFD Signal Aggregator v3.3
+SFD Signal Aggregator v3.4
 ==========================
+v3.3 → v3.4 패치:
+  - tech_total_score 컬럼명 자동탐지 추가 (tech_total_score / tech_score / score 순)
 v3.2 → v3.3 패치:
   - tech_score rename 버그 수정: score 컬럼 별도 초기화 후 tech_score 누적
   - global_trigger 컬럼명 자동 탐지 (ticker / stock_code 모두 허용)
@@ -72,9 +74,14 @@ def load_all_inputs():
 
     if os.path.exists(TECH_CSV):
         tech_df = pd.read_csv(TECH_CSV)
-        # [FIX v3.3] 컬럼명 표준화: score → tech_score (이미 tech_score면 그대로)
-        if "score" in tech_df.columns and "tech_score" not in tech_df.columns:
-            tech_df.rename(columns={"score": "tech_score"}, inplace=True)
+        # [FIX v3.4] 컬럼명 자동탐지: tech_total_score / tech_score / score 순으로 → tech_score로 표준화
+        _tscore_col = next(
+            (c for c in ["tech_total_score", "tech_score", "score"] if c in tech_df.columns),
+            None
+        )
+        if _tscore_col and _tscore_col != "tech_score":
+            tech_df.rename(columns={_tscore_col: "tech_score"}, inplace=True)
+            logger.info(f"tech score 컬럼 표준화: '{_tscore_col}' → 'tech_score'")
         code_col = detect_code_col(tech_df)
         if code_col != "stock_code":
             tech_df.rename(columns={code_col: "stock_code"}, inplace=True)
@@ -288,7 +295,7 @@ def aggregate_signals(inputs, global_trigger_map, macro_boost_map):
 # ===== MAIN =====
 def main():
     logger.info("=" * 70)
-    logger.info("SFD Signal Aggregator v3.3 - 실행 시작")
+    logger.info("SFD Signal Aggregator v3.4 - 실행 시작")
     logger.info("=" * 70)
 
     inputs = load_all_inputs()
@@ -320,7 +327,7 @@ def main():
     logger.info(f"최저 스코어: {master['score'].min():.1f}pt")
 
     logger.info("\n" + "=" * 70)
-    logger.info("✅ Signal Aggregator v3.3 완료")
+    logger.info("✅ Signal Aggregator v3.4 완료")
     logger.info("=" * 70)
 
     return True
