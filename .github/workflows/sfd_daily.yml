@@ -105,23 +105,21 @@ jobs:
         run: python tools/sfd_oscillation_analyzer.py
         continue-on-error: true
 
-      # ── Layer 2: signal_aggregator (global/macro CSV 이미 생성됨) ─────
-      - name: Layer 2 — signal_aggregator
-        run: python tools/sfd_signal_aggregator.py
-
-      - name: Layer 2.5 — rerating_watch
-        run: python tools/sfd_rerating_watch.py
-        continue-on-error: true
-
-      # ── [V1.6] Layer 2.6: fundamental_watch ───────────────────────────
-      - name: Layer 2.6 — fundamental_watch
+      # ── [V10.1] Layer 2.6/2.6c: fund/investor before aggregator ────
+      - name: Layer 2.6 -- fundamental_watch
         run: python tools/sfd_fundamental_watch.py
-        continue-on-error: true
-
-      - name: Layer 2.6b — sector_injector
+      - name: Layer 2.6b -- sector_injector
         run: python tools/sfd_sector_injector.py
         continue-on-error: true
-
+      - name: Layer 2.6c -- investor_flow_fetch
+        run: python tools/sfd_investor_flow_fetch.py
+        continue-on-error: true
+      # ── Layer 2: signal_aggregator (fund/investor CSV 준비 후) ────
+      - name: Layer 2 -- signal_aggregator
+        run: python tools/sfd_signal_aggregator.py
+      - name: Layer 2.5 -- rerating_watch
+        run: python tools/sfd_rerating_watch.py
+        continue-on-error: true
       - name: Layer 3 — backtest_d1
         run: python tools/sfd_backtest_d1.py
         continue-on-error: true
