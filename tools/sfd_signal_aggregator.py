@@ -25,7 +25,8 @@ import numpy as np
 
 
 # ===== CONFIG =====
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+_env_base = os.environ.get("SFD_BASE_DIR", "")
+BASE_DIR = _env_base if (_env_base and os.path.isdir(_env_base)) else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTPUTS_DIR = os.path.join(BASE_DIR, "outputs", "latest")
 os.makedirs(OUTPUTS_DIR, exist_ok=True)
 
