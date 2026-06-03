@@ -346,7 +346,7 @@ def main():
         logger.info(f"{sig:15s}: {cnt:4d}종목")
     
     logger.info(f"\n평균 스코어: {master['score'].mean():.1f}pt")
-    logger.info(f"최고 스코어: {master['score'].max():.1f}pt ({master.loc[master['score'].idxmax(), 'name']})")
+    logger.info(f"최고 스코어: {master['score'].max():.1f}pt ({master.loc[master['score'].idxmax(), 'name'] if 'name' in master.columns else 'N/A'})")
     logger.info(f"최저 스코어: {master['score'].min():.1f}pt")
     
     logger.info("\n" + "=" * 70)
