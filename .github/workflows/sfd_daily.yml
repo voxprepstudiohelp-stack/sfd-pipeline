@@ -1,4 +1,4 @@
-name: SFD Daily Pipeline
+﻿name: SFD Daily Pipeline
 # 파일위치(GitHub): sfd-pipeline/.github/workflows/sfd_daily.yml
 # V10.0 | 2026-06-03 | Claude Sonnet 4.6
 #
