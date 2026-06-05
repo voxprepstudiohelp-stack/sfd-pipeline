@@ -1,33 +1,23 @@
-# sfd_signal_aggregator.py | v3.7 | Claude (Anthropic) 2026-06-04
+# sfd_signal_aggregator.py | v3.8 | Claude (Anthropic) 2026-06-05
 # Deploy to: sfd-pipeline/tools/sfd_signal_aggregator.py
 #
-# [v3.5 → v3.7 변경사항]
-# - [FIX-7] FUNDAMENTAL_CSV = sfd_fundamental_watch_latest.csv (실제 출력 파일명 통일)
-# - Deploy path 수정: sfd-pipeline/tools/ 경로
+# [v3.7 → v3.8 변경사항]
+# - [FIX-A] FUNDAMENTAL_CSV: sfd_fundamental_watch_latest.csv (primary)
+#           + sfd_fundamental_latest.csv (fallback) 자동 탐지
+#   → fundamental_watch.py v1.6 출력파일명과 일치
+# - [FIX-B] score_investor(): stock_code/ticker 컬럼명 자동탐지
+#   → KIS API v2.1 출력(stock_code) ↔ aggregator join 불일치 해소
 #
-# [v3.4 → v3.5 변경사항]
-# - [FIX-1] NEWS_SCORE_CSV: sfd_news_sentiment_latest.csv → sfd_news_score_latest.csv
-# - [FIX-2] FUNDAMENTAL_CSV: sfd_fundamental_watch_latest.csv → sfd_fundamental_latest.csv
-# - [FIX-3] load_fund_score_map: "fund_score" → "adjusted_fund_score" 컬럼 탐지
-# - [FIX-4] score_investor: investor_score 컬럼 없는 raw 데이터 처리
-#            foreign_net_buy(+10) + institution_net_buy(+10) 직접 계산 유지
-#            단, data_status=="ZERO" 또는 "FAIL" 시 0점 처리 추가
-# - [FIX-5] theme: sfd_theme_score_latest.csv 미존재 시 0점 graceful 처리 (기존 동일)
-#            → score_theme fallback: prev_value 컬럼 없으면 0 반환 (기존 동일)
-#
-# [스코어 아키텍처 현황 v3.7]
-# total = tech(max85) + news(max30) + investor(max20)
-#       + theme(max10) + fund(max15) + bias_filter(±5) + vol_surge(0~10)
-#       + zone_pullback(0~15) max=190pt
-# 신호 오버라이드: NO_TRADE > SIGNAL_EXPIRED > raw_signal
-#
-# [v3.4 유지사항]
+# [v3.5 유지사항 전체 그대로]
 # - tech_total_score 컬럼명 자동탐지
 # - BM-13 Signal Timeout State Machine
 # - BM-12 zone_pullback_score
 # - BM-10 vol_surge_score
 # - BM-5  no_trade 오버라이드
 # - BM-3  bias_filter_score
+# - [FIX-1] news: sfd_news_score_latest.csv
+# - [FIX-4] investor: foreign_net_buy/institution_net_buy 직접 계산
+# - [FIX-5] theme: graceful 처리
 
 import os
 import sys
@@ -60,10 +50,11 @@ INPUT_CSV           = os.path.join(INPUT_DIR,  "sfd_master_signal_input.csv")
 LOG_PATH            = os.path.join(LATEST_DIR, "sfd_signal_aggregator.log")
 PREV_CLOSE_CSV      = os.path.join(LATEST_DIR, "sfd_prev_close_latest.csv")
 INVESTOR_CSV        = os.path.join(LATEST_DIR, "sfd_investor_flow_latest.csv")
-# [FIX-1] 파일명 수정: sfd_news_sentiment_latest.csv → sfd_news_score_latest.csv
+# [FIX-1] news 파일명
 NEWS_SCORE_CSV      = os.path.join(LATEST_DIR, "sfd_news_score_latest.csv")
-# [FIX-7] 파일명 수정: sfd_fundamental_latest.csv → sfd_fundamental_watch_latest.csv
-FUNDAMENTAL_CSV     = os.path.join(LATEST_DIR, "sfd_fundamental_watch_latest.csv")
+# [FIX-A] fundamental: watch˲�전 우선, 없으면 legacy fallback
+FUNDAMENTAL_CSV_PRIMARY  = os.path.join(LATEST_DIR, "sfd_fundamental_watch_latest.csv")
+FUNDAMENTAL_CSV_FALLBACK = os.path.join(LATEST_DIR, "sfd_fundamental_latest.csv")
 TECH_DETAIL_CSV     = os.path.join(LATEST_DIR, "sfd_technical_latest.csv")
 NO_TRADE_JSON       = os.path.join(LATEST_DIR, "sfd_no_trade_tickers.json")
 ZONE_PULLBACK_CSV   = os.path.join(LATEST_DIR, "sfd_zone_pullback_latest.csv")
@@ -137,25 +128,25 @@ def get_technical_data(ticker, end_date):
         df    = fdr.DataReader(ticker, start, end.strftime("%Y-%m-%d"))
         if df is None or len(df) < MA_LONG: return None
         df = df.sort_index()
-        df["rsi"]           = calc_rsi(df["Close"], RSI_PERIOD)
+        df["rsi"]          = calc_rsi(df["Close"], RSI_PERIOD)
         df[f"ma{MA_SHORT}"] = df["Close"].rolling(MA_SHORT).mean()
         df[f"ma{MA_MID}"]   = df["Close"].rolling(MA_MID).mean()
         df[f"ma{MA_LONG}"]  = df["Close"].rolling(MA_LONG).mean()
         df["vol_avg"]       = df["Volume"].rolling(VOL_PERIOD).mean()
         last = df.iloc[-1]
         return {
-            "rsi":      round(last["rsi"], 2) if not pd.isna(last["rsi"]) else None,
-            "ma_short": last[f"ma{MA_SHORT}"],
-            "ma_mid":   last[f"ma{MA_MID}"],
-            "ma_long":  last[f"ma{MA_LONG}"],
-            "volume":   last["Volume"],
-            "vol_avg":  last["vol_avg"],
-            "close":    last["Close"],
+            "rsi":       round(last["rsi"], 2) if not pd.isna(last["rsi"]) else None,
+            "ma_short":  last[f"ma{MA_SHORT}"],
+            "ma_mid":    last[f"ma{MA_MID}"],
+            "ma_long":   last[f"ma{MA_LONG}"],
+            "volume":    last["Volume"],
+            "vol_avg":   last["vol_avg"],
+            "close":     last["Close"],
         }
     except: return None
 
 
-# ── 스코어 함수들 ──────────────────────────────────────────────────────────────
+# ── 스코어 함수 ────────────────────────────────────────────────────────────────
 def score_rsi(rsi):
     if rsi is None: return 0
     if rsi < 30: return 15
@@ -186,13 +177,21 @@ def score_fundamental(ticker, fund_map):
 
 def score_investor(ticker, investor_df):
     """
-    [FIX-4] investor_score 컬럼 없음 → foreign_net_buy/institution_net_buy 직접 계산
-    - data_status가 ZERO 또는 FAIL이면 0점
+    [FIX-B] stock_code/ticker 컬럼명 자동탐지
+    - KIS API v2.1 출력: stock_code 컬럼
+    - 이전 버전: ticker 컬럼
     - foreign_net_buy > 0: +10pt
     - institution_net_buy > 0: +10pt
+    - data_status==ZERO/FAIL: 0점
     """
     if investor_df is None or investor_df.empty: return 0
-    row = investor_df[investor_df["ticker"] == ticker]
+    # [FIX-B] 컬럼명 자동탐지
+    _icol = next((c for c in ["ticker", "stock_code"] if c in investor_df.columns), None)
+    if _icol is None: return 0
+    row = investor_df[investor_df[_icol] == ticker]
+    if row.empty:
+        # zfill 시도
+        row = investor_df[investor_df[_icol] == str(ticker).zfill(6)]
     if row.empty: return 0
     try:
         status = str(row.iloc[0].get("data_status", "OK")).upper()
@@ -217,7 +216,7 @@ def classify_signal(total_score):
     return "HOLD"
 
 
-# ── [BM-3] Bias Filter ────────────────────────────────────────────────────────
+# ── [BM-3] Bias Filter ──────────────────────────────────────────────────────
 def calc_bias_filter(close, ma20, ma60):
     try:
         if pd.isna(ma20) or pd.isna(ma60) or ma20 <= 0 or ma60 <= 0:
@@ -234,7 +233,7 @@ def calc_bias_filter(close, ma20, ma60):
         return 0, 0.0, 0.0
 
 
-# ── [BM-5] no_trade_set 로드 ──────────────────────────────────────────────────
+# ── [BM-5] no_trade_set 로드 ─────────────────────────────────────────────────
 def load_no_trade_set() -> set:
     if not os.path.exists(NO_TRADE_JSON):
         logging.info(f"[BM-5] no_trade JSON 없음: {NO_TRADE_JSON}")
@@ -256,7 +255,7 @@ def load_no_trade_set() -> set:
         return set()
 
 
-# ── [BM-12] zone_pullback_map 로드 ───────────────────────────────────────────
+# ── [BM-12] zone_pullback_map 로드 ──────────────────────────────────────────
 def load_zone_pullback_map() -> dict:
     if not os.path.exists(ZONE_PULLBACK_CSV):
         logging.info(f"[BM-12] zone_pullback CSV 없음: {ZONE_PULLBACK_CSV}")
@@ -314,9 +313,9 @@ def apply_signal_timeout(ticker: str, raw_signal: str, trade_date: str,
         if ticker_state is None:
             return "HOLD", 0, "", False, None
 
-        bars   = int(ticker_state.get("bars_elapsed", 0)) + 1
-        issued = ticker_state.get("issued_date", trade_date)
-        sig    = ticker_state.get("signal", "HOLD")
+        bars    = int(ticker_state.get("bars_elapsed", 0)) + 1
+        issued  = ticker_state.get("issued_date", trade_date)
+        sig     = ticker_state.get("signal", "HOLD")
 
         if bars > TIMEOUT_BARS:
             new_state = {"signal": sig, "issued_date": issued, "bars_elapsed": bars}
@@ -332,7 +331,7 @@ def apply_signal_timeout(ticker: str, raw_signal: str, trade_date: str,
 # ── tech_detail_map 로드 ──────────────────────────────────────────────────────
 def load_tech_detail_map() -> dict:
     if not os.path.exists(TECH_DETAIL_CSV):
-        logging.warning(f"[v3.7] TECH_DETAIL_CSV not found")
+        logging.warning(f"[v3.8] TECH_DETAIL_CSV not found")
         return {}
     try:
         df = pd.read_csv(TECH_DETAIL_CSV, encoding="utf-8-sig", dtype={"ticker": str})
@@ -388,50 +387,62 @@ def load_tech_detail_map() -> dict:
                 "poc_score":           float(row.get("poc_score",            0)),
                 "sr_score":            float(row.get("sr_score",             0)),
                 "rsi":                 float(row.get("rsi",                 50)),
-                "ma_label":            str(row.get("ma_label",              "")),
+                "ma_label":            str(row.get("ma_label",               "")),
                 "tech_source_ver":     tech_source_ver,
             }
 
-        logging.info(f"[v3.7] tech_map: {len(tech_map)} tickers")
+        logging.info(f"[v3.8] tech_map: {len(tech_map)} tickers")
         return tech_map
     except Exception as e:
-        logging.error(f"[v3.7] tech_map load failed: {e}")
+        logging.error(f"[v3.8] tech_map load failed: {e}")
         return {}
 
 
 # ── [FIX-1] news_score_map 로드 ──────────────────────────────────────────────
 def load_news_score_map() -> dict:
     if not os.path.exists(NEWS_SCORE_CSV):
-        logging.warning(f"[v3.7] NEWS_SCORE_CSV not found: {NEWS_SCORE_CSV}")
+        logging.warning(f"[v3.8] NEWS_SCORE_CSV not found: {NEWS_SCORE_CSV}")
         return {}
     try:
         df = pd.read_csv(NEWS_SCORE_CSV, encoding="utf-8-sig", dtype={"ticker": str})
         if "ticker" not in df.columns or "news_score" not in df.columns:
-            logging.warning(f"[v3.7] NEWS_SCORE_CSV 컬럼 불일치: {list(df.columns)}")
+            logging.warning(f"[v3.8] NEWS_SCORE_CSV 컬럼 없음: {list(df.columns)}")
             return {}
         result = dict(zip(
             df["ticker"].str.strip().str.zfill(6),
             pd.to_numeric(df["news_score"], errors="coerce").fillna(0)
         ))
-        logging.info(f"[v3.7] news_score_map: {len(result)}건")
+        logging.info(f"[v3.8] news_score_map: {len(result)}건")
         return result
     except Exception as e:
-        logging.warning(f"[v3.7] news_score_map 로드 실패: {e}")
+        logging.warning(f"[v3.8] news_score_map 로드 실패: {e}")
         return {}
 
 
-# ── [FIX-7] fund_score_map 로드 ──────────────────────────────────────────────
+# ── [FIX-A] fund_score_map 로드 (watch 우선, fallback) ───────────────────────
 def load_fund_score_map() -> dict:
     """
-    sfd_fundamental_watch_latest.csv 로드  ← [FIX-7]
-    [FIX-3] adjusted_fund_score > fund_score > fundamental_score 순 자동탐지
-    → ticker → normalized fund_score (0~15pt) 맵 반환
+    [FIX-A] fundamental CSV 우선순위:
+    1. sfd_fundamental_watch_latest.csv  (v1.6 출력)
+    2. sfd_fundamental_latest.csv        (legacy fallback)
+
+    [FIX-3 유지] 스코어 컬럼: adjusted_fund_score > fund_score > fundamental_score
+    → 0~100점을 0~15pt로 정규화
     """
-    if not os.path.exists(FUNDAMENTAL_CSV):
-        logging.warning(f"[v3.7] FUNDAMENTAL_CSV not found: {FUNDAMENTAL_CSV}")
+    # 파일 선택
+    fund_csv = None
+    if os.path.exists(FUNDAMENTAL_CSV_PRIMARY):
+        fund_csv = FUNDAMENTAL_CSV_PRIMARY
+        logging.info(f"[v3.8][FIX-A] fund CSV (primary): {fund_csv}")
+    elif os.path.exists(FUNDAMENTAL_CSV_FALLBACK):
+        fund_csv = FUNDAMENTAL_CSV_FALLBACK
+        logging.info(f"[v3.8][FIX-A] fund CSV (fallback): {fund_csv}")
+    else:
+        logging.warning(f"[v3.8][FIX-A] fundamental CSV 없음 (primary={FUNDAMENTAL_CSV_PRIMARY})")
         return {}
+
     try:
-        df = pd.read_csv(FUNDAMENTAL_CSV, encoding="utf-8-sig", dtype={"ticker": str})
+        df = pd.read_csv(fund_csv, encoding="utf-8-sig", dtype={"ticker": str})
         if "ticker" not in df.columns:
             return {}
 
@@ -441,30 +452,31 @@ def load_fund_score_map() -> dict:
             None
         )
         if score_col is None:
-            logging.warning(f"[v3.7] FUNDAMENTAL_CSV score 컬럼 없음. 컬럼: {list(df.columns)}")
+            logging.warning(f"[v3.8][FIX-A] fund score 컬럼 없음. 컬럼: {list(df.columns)}")
             return {}
 
-        logging.info(f"[v3.7] fund score_col 탐지: '{score_col}'")
+        logging.info(f"[v3.8] fund score_col: '{score_col}'")
         df["ticker"] = df["ticker"].str.strip().str.zfill(6)
         df["_norm"]  = (
             pd.to_numeric(df[score_col], errors="coerce")
             .fillna(0).clip(upper=100).div(100).mul(FUND_MAX_PT).round(2)
         )
         result = dict(zip(df["ticker"], df["_norm"]))
-        logging.info(f"[v3.7] fund_score_map: {len(result)}건")
+        nonzero = sum(1 for v in result.values() if v > 0)
+        logging.info(f"[v3.8] fund_score_map: {len(result)}건 | nonzero={nonzero}")
         return result
     except Exception as e:
-        logging.warning(f"[v3.7] fund_score_map 로드 실패: {e}")
+        logging.warning(f"[v3.8] fund_score_map 로드 실패: {e}")
         return {}
 
 
-# ── MAIN ───────────────────────────────────────────────────────────────────────
+# ── MAIN ──────────────────────────────────────────────────────────────────────
 def main():
-    logging.info("=== sfd_signal_aggregator v3.7 START ===")
+    logging.info("=== sfd_signal_aggregator v3.8 START ===")
     logging.info(f"BASE_DIR:   {BASE_DIR}")
     logging.info(f"THRESHOLD:  RESERVE={THRESHOLD_RESERVE} WATCH={THRESHOLD_WATCH}")
     logging.info(f"[BM-13] Signal Timeout: {TIMEOUT_BARS}봉 | 대상: {TIMEOUT_SIGNALS}")
-    logging.info("[v3.7] FIX-7: FUNDAMENTAL_CSV = sfd_fundamental_watch_latest.csv")
+    logging.info("[v3.8] FIX: fund_watch_primary + investor_stock_code_detect")
 
     trade_date = find_recent_trade_date()
     logging.info(f"trade_date: {trade_date}")
@@ -475,13 +487,13 @@ def main():
 
     input_df    = pd.read_csv(INPUT_CSV,       encoding="utf-8-sig", dtype={"ticker": str})
     prev_df     = pd.read_csv(PREV_CLOSE_CSV,  encoding="utf-8-sig", dtype={"ticker": str})
-    investor_df = pd.read_csv(INVESTOR_CSV,    encoding="utf-8-sig", dtype={"ticker": str}) \
+    investor_df = pd.read_csv(INVESTOR_CSV,    encoding="utf-8-sig", dtype=str) \
                   if os.path.exists(INVESTOR_CSV) else None
 
     if investor_df is not None:
-        logging.info(f"[v3.7] investor_df: {len(investor_df)}행, 컬럼: {list(investor_df.columns)}")
+        logging.info(f"[v3.8] investor_df: {len(investor_df)}행, 컬럼: {list(investor_df.columns)}")
     else:
-        logging.warning(f"[v3.7] INVESTOR_CSV not found: {INVESTOR_CSV}")
+        logging.warning(f"[v3.8] INVESTOR_CSV not found: {INVESTOR_CSV}")
 
     news_score_map    = load_news_score_map()
     fund_map          = load_fund_score_map()
@@ -492,7 +504,7 @@ def main():
 
     use_tech_detail = len(tech_detail_map) > 0
     logging.info(
-        f"[v3.7] use_tech_detail={use_tech_detail} | tech={len(tech_detail_map)} "
+        f"[v3.8] use_tech_detail={use_tech_detail} | tech={len(tech_detail_map)} "
         f"| news={len(news_score_map)} | fund={len(fund_map)} "
         f"| investor={'있음' if investor_df is not None else '없음'} "
         f"| no_trade={len(no_trade_set)} | zp={len(zone_pullback_map)} "
@@ -506,7 +518,7 @@ def main():
     has_ma20_col  = "ma20"  in prev_df.columns
     has_ma60_col  = "ma60"  in prev_df.columns
 
-    # ticker 컬럼명 자동탐지 (stock_code 호환)
+    # ticker 컬럼 자동탐지 (stock_code 대응)
     _tcol_input = next(
         (c for c in ["ticker", "stock_code"] if c in input_df.columns),
         input_df.columns[0]
@@ -592,22 +604,22 @@ def main():
         zp_label = str(zp_data.get("zone_pullback_label", "") or "")
 
         total      = (t_score + n_score + i_score + ths_score + f_score
-                     + bias_score + vs_score + zp_score)
+                      + bias_score + vs_score + zp_score)
         raw_signal = classify_signal(total)
 
         (timeout_signal, bars_elapsed, issued_date,
          is_timeout, updated_ts) = apply_signal_timeout(
              ticker, raw_signal, trade_date, timeout_state
-        )
+         )
         if updated_ts is not None:
             new_timeout_state[ticker] = updated_ts
 
         if ticker in no_trade_set:
             signal        = "NO_TRADE"
-            no_trade_flag = True
+            no_trade_flag  = True
         else:
             signal        = timeout_signal
-            no_trade_flag = False
+            no_trade_flag  = False
 
         name_row = input_df[input_df["ticker"] == ticker]
         name     = name_row.iloc[0].get("name", "") if not name_row.empty else ""
