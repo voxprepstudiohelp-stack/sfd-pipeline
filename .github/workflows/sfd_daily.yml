@@ -1,15 +1,17 @@
 name: SFD Daily Pipeline
-# 파일위치(GitHub): sfd-pipeline/.github/workflows/sfd_daily.yml
-# V10.1 | 2026-06-03 | Claude Sonnet 4.6
+# sfd-pipeline/.github/workflows/sfd_daily.yml
+# V10.2 | 2026-06-05 | Claude Sonnet 4.6
 #
-# [V10.0 → V10.1 변경사항]
-# - fundamental_watch 순서: signal_aggregator 이후 유지 (master_signal 의존성)
-# - investor_flow_fetch 스텝 추가 (signal_aggregator 이후)
-# - v3.7: FUNDAMENTAL_CSV = sfd_fundamental_watch_latest.csv (실제 출력 파일명)
+# [V10.1 -> V10.2 changes]
+# - 2-pass aggregator structure:
+#   Pass1: aggregator (fund=0, generates master_signal for fundamental_watch input)
+#   Pass2: fundamental_watch + investor_flow_fetch (uses master_signal top-200)
+#   Pass3: aggregator re-run (final signal with fund_score + investor_score)
+# - This fixes fund_score=0 and investor_score=0 permanently
 
 on:
   schedule:
-    # KST 08:35 = UTC 23:35 (전날 기준, 일~목)
+    # KST 08:35 = UTC 23:35 (weekdays)
     - cron: '35 23 * * 0-4'
   workflow_dispatch:
 
@@ -56,35 +58,35 @@ jobs:
           cp portfolio.json /tmp/sfd/ || true
           cp inputs/sfd_naver_news_queries.csv /tmp/sfd/inputs/ || true
 
-      # ── [NEW V10.0] Layer -2: MACRO RADAR ─────────────────────────────
+      # -- Layer -2: MACRO RADAR --
       - name: "Layer -2: MACRO RADAR"
         run: python tools/sfd_macro_radar.py
         continue-on-error: true
 
-      # ── [NEW V10.0] Layer 0.5: GLOBAL TRIGGER ─────────────────────────
+      # -- Layer 0.5: GLOBAL TRIGGER --
       - name: "Layer 0.5: GLOBAL TRIGGER"
         run: python tools/sfd_global_trigger.py
         continue-on-error: true
 
-      # ── Layer 1 ────────────────────────────────────────────────────────
-      - name: Layer 1 — prev_close_fetch
+      # -- Layer 1: prev_close_fetch --
+      - name: Layer 1 -- prev_close_fetch
         run: python tools/sfd_prev_close_fetch.py
 
       - name: Make signal_input from prev_close
         run: |
-          cp /tmp/sfd/inputs/sfd_prev_close_input.csv              /tmp/sfd/inputs/sfd_master_signal_input.csv || true
-          echo "[OK] sfd_master_signal_input.csv 생성 완료"
+          cp /tmp/sfd/inputs/sfd_prev_close_input.csv /tmp/sfd/inputs/sfd_master_signal_input.csv || true
+          echo "[OK] sfd_master_signal_input.csv ready"
           ls -la /tmp/sfd/inputs/
 
-      - name: Layer 1.5 — news_fetcher
+      - name: Layer 1.5 -- news_fetcher
         run: python tools/sfd_news_fetcher.py
         continue-on-error: true
 
-      - name: Layer 1.6 — event_calendar_builder
+      - name: Layer 1.6 -- event_calendar_builder
         run: python tools/sfd_event_calendar_builder.py
         continue-on-error: true
 
-      - name: Layer 2.7 — technical_analyzer
+      - name: Layer 2.7 -- technical_analyzer
         run: python tools/sfd_technical_analyzer.py
 
       - name: Verify technical output
@@ -96,44 +98,55 @@ jobs:
           fi
           echo "OK: sfd_technical_latest.csv $(wc -l < /tmp/sfd/outputs/latest/sfd_technical_latest.csv) lines"
 
-      - name: Layer 2.8 — oscillation_analyzer
+      - name: Layer 2.8 -- oscillation_analyzer
         run: python tools/sfd_oscillation_analyzer.py
         continue-on-error: true
 
-      # ── Layer 2: signal_aggregator ────────────────────────────────────
-      - name: Layer 2 — signal_aggregator
+      # ============================================================
+      # PASS 1: aggregator (fund=0) -> generates master_signal
+      #         so that fundamental_watch can read top-200 tickers
+      # ============================================================
+      - name: "Layer 2 Pass1 -- signal_aggregator (pre-fund)"
         run: python tools/sfd_signal_aggregator.py
 
-      - name: Layer 2.5 — rerating_watch
+      - name: Layer 2.5 -- rerating_watch
         run: python tools/sfd_rerating_watch.py
         continue-on-error: true
 
-      # ── [V10.1] Layer 2.6: fundamental/sector/investor (signal_aggregator 이후) ──
-      - name: Layer 2.6 — fundamental_watch
+      # ============================================================
+      # PASS 2: collect fund + investor data using master_signal
+      # ============================================================
+      - name: Layer 2.6 -- fundamental_watch
         run: python tools/sfd_fundamental_watch.py
         continue-on-error: true
 
-      - name: Layer 2.6b — sector_injector
+      - name: Layer 2.6b -- sector_injector
         run: python tools/sfd_sector_injector.py
         continue-on-error: true
 
-      - name: Layer 2.6c — investor_flow_fetch
+      - name: Layer 2.6c -- investor_flow_fetch
         run: python tools/sfd_investor_flow_fetch.py
         continue-on-error: true
 
-      - name: Layer 3 — backtest_d1
+      # ============================================================
+      # PASS 3: aggregator re-run with fund_score + investor_score
+      # ============================================================
+      - name: "Layer 2 Pass3 -- signal_aggregator (final with fund+investor)"
+        run: python tools/sfd_signal_aggregator.py
+
+      - name: Layer 3 -- backtest_d1
         run: python tools/sfd_backtest_d1.py
         continue-on-error: true
 
-      - name: Layer 4 — finalize
+      - name: Layer 4 -- finalize
         run: python tools/sfd_finalize.py
         continue-on-error: true
 
-      - name: Layer 5 — portfolio_monitor
+      - name: Layer 5 -- portfolio_monitor
         run: python tools/sfd_portfolio_monitor.py
         continue-on-error: true
 
-      - name: Layer 5.5 — trade_guardian
+      - name: Layer 5.5 -- trade_guardian
         run: python sfd_trade_guardian.py
         continue-on-error: true
 
