@@ -31,7 +31,7 @@ import pandas as pd
 import numpy as np
 import FinanceDataReader as fdr
 
-# -- Path config --
+# -- Path config --────────────────────────────────────────────────────────────────
 _env_base = os.environ.get("SFD_BASE_DIR", "")
 if _env_base and os.path.isdir(_env_base):
     BASE_DIR = _env_base
@@ -74,7 +74,7 @@ START_TIME = time.time()
 now        = datetime.now()
 fetch_time = now.strftime("%Y-%m-%d %H:%M:%S")
 
-# -- Parameters --
+# -- Parameters --─────────────────────────────────────────────────────────────────
 RSI_PERIOD       = 14
 MA_SHORT         = 5
 MA_MID           = 20
@@ -98,7 +98,7 @@ TIMEOUT_BARS    = 5
 TIMEOUT_SIGNALS = {"RESERVE_BUY", "WATCH_ONLY"}
 
 
-# -- Find recent trade date --
+# -- Find recent trade date --────────────────────────────────────────────────────────
 def find_recent_trade_date():
     for i in range(7):
         d = now - timedelta(days=i)
@@ -112,7 +112,7 @@ def find_recent_trade_date():
     return now.strftime("%Y%m%d")
 
 
-# -- v2.2 fallback technical calc --
+# -- v2.2 fallback technical calc --─────────────────────────────────────────────────
 def calc_rsi(series, period=14):
     delta    = series.diff()
     gain     = delta.clip(lower=0)
@@ -147,7 +147,7 @@ def get_technical_data(ticker, end_date):
     except: return None
 
 
-# -- Score functions --
+# -- Score functions --──────────────────────────────────────────────────────────────
 def score_rsi(rsi):
     if rsi is None: return 0
     if rsi < 30: return 15
@@ -212,12 +212,12 @@ def score_theme(ticker, prev_df):
     except: return 0
 
 def classify_signal(total_score):
-    if total_score >= THESHOLD_RESERVE: return "RESERVE_BUY"
+    if total_score >= THRESHOLD_RESERVE: return "RESERVE_BUY"
     if total_score >= THRESHOLD_WATCH:   return "WATCH_ONLY"
     return "HOLD"
 
 
-# -- [BM-3] Bias Filter --
+# -- [BM-3] Bias Filter --────────────────────────────────────────────────────
 def calc_bias_filter(close, ma20, ma60):
     try:
         if pd.isna(ma20) or pd.isna(ma60) or ma20 <= 0 or ma60 <= 0:
@@ -234,7 +234,7 @@ def calc_bias_filter(close, ma20, ma60):
         return 0, 0.0, 0.0
 
 
-# -- [BM-5] load no_trade_set --
+# -- [BM-5] load no_trade_set --───────────────────────────────────────────────
 def load_no_trade_set() -> set:
     if not os.path.exists(NO_TRADE_JSON):
         logging.info(f"[BM-5] no_trade JSON not found: {NO_TRADE_JSON}")
@@ -249,14 +249,14 @@ def load_no_trade_set() -> set:
         else:
             tickers = []
         result = {str(t).strip().zfill(6) for t in tickers if t}
-        logging.info(f"[BM-5] no_trade_set: {len(result)} rows")
+        logging.info(f"[BM-5] no_trade_set: {len(result)}rows")
         return result
     except Exception as e:
         logging.warning(f"[BM-5] no_trade JSON load failed: {e}")
         return set()
 
 
-# -- [BM-12] load zone_pullback_map --
+# -- [BM-12] load zone_pullback_map --────────────────────────────────────────
 def load_zone_pullback_map() -> dict:
     if not os.path.exists(ZONE_PULLBACK_CSV):
         logging.info(f"[BM-12] zone_pullback CSV not found: {ZONE_PULLBACK_CSV}")
@@ -273,14 +273,14 @@ def load_zone_pullback_map() -> dict:
                 "zone_pullback_score": float(row.get("zone_pullback_score", 0) or 0),
                 "zone_pullback_label": str(row.get("zone_pullback_label", "") or ""),
             }
-        logging.info(f"[BM-12] zone_pullback_map: {len(result)} rows")
+        logging.info(f"[BM-12] zone_pullback_map: {len(result)}rows")
         return result
     except Exception as e:
         logging.warning(f"[BM-12] zone_pullback_map load failed: {e}")
         return {}
 
 
-# -- [BM-13] Signal Timeout State Machine --
+# -- [BM-13] Signal Timeout State Machine --───────────────────────────────────
 def load_timeout_state() -> dict:
     if not os.path.exists(TIMEOUT_STATE_JSON):
         return {}
@@ -314,9 +314,9 @@ def apply_signal_timeout(ticker: str, raw_signal: str, trade_date: str,
         if ticker_state is None:
             return "HOLD", 0, "", False, None
 
-        bars    = int(ticker_state.get("bars_elapsed", 0)) + 1
-        issued  = ticker_state.get("issued_date", trade_date)
-        sig     = ticker_state.get("signal", "HOLD")
+        bars   = int(ticker_state.get("bars_elapsed", 0)) + 1
+        issued = ticker_state.get("issued_date", trade_date)
+        sig    = ticker_state.get("signal", "HOLD")
 
         if bars > TIMEOUT_BARS:
             new_state = {"signal": sig, "issued_date": issued, "bars_elapsed": bars}
@@ -329,7 +329,7 @@ def apply_signal_timeout(ticker: str, raw_signal: str, trade_date: str,
         return raw_signal, 0, "", False, None
 
 
-# -- load tech_detail_map --
+# -- load tech_detail_map --────────────────────────────────────────────────────
 def load_tech_detail_map() -> dict:
     if not os.path.exists(TECH_DETAIL_CSV):
         logging.warning(f"[v3.8] TECH_DETAIL_CSV not found")
@@ -399,10 +399,10 @@ def load_tech_detail_map() -> dict:
         return {}
 
 
-# -- [FIX-1] load news_score_map --
+# -- [FIX-1] load news_score_map --────────────────────────────────────────────
 def load_news_score_map() -> dict:
     if not os.path.exists(NEWS_SCORE_CSV):
-        logging.warning(f"[v3.8] NENS_SCORE_CSV not found: {NEWS_SCORE_CSV}")
+        logging.warning(f"[v3.8] NEWS_SCORE_CSV not found: {NEWS_SCORE_CSV}")
         return {}
     try:
         df = pd.read_csv(NEWS_SCORE_CSV, encoding="utf-8-sig", dtype={"ticker": str})
@@ -413,14 +413,14 @@ def load_news_score_map() -> dict:
             df["ticker"].str.strip().str.zfill(6),
             pd.to_numeric(df["news_score"], errors="coerce").fillna(0)
         ))
-        logging.info(f"[v3.8] news_score_map: {len(result)} rows")
+        logging.info(f"[v3.8] news_score_map: {len(result)}rows")
         return result
     except Exception as e:
         logging.warning(f"[v3.8] news_score_map load failed: {e}")
         return {}
 
 
-# -- [FIX-A] load fund_score_map (watch primary, fallback) --
+# -- [FIX-A] load fund_score_map (watch primary, fallback) --─────────────────────
 def load_fund_score_map() -> dict:
     """
     [FIX-A] fundamental CSV priority:
@@ -464,19 +464,19 @@ def load_fund_score_map() -> dict:
         )
         result = dict(zip(df["ticker"], df["_norm"]))
         nonzero = sum(1 for v in result.values() if v > 0)
-        logging.info(f"[v3.8] fund_score_map: {len(result)} rows | nonzero={nonzero}")
+        logging.info(f"[v3.8] fund_score_map: {len(result)}rows | nonzero={nonzero}")
         return result
     except Exception as e:
         logging.warning(f"[v3.8] fund_score_map load failed: {e}")
         return {}
 
 
-# -- MAIN --
+# -- MAIN --────────────────────────────────────────────────────────────────────
 def main():
     logging.info("=== sfd_signal_aggregator v3.8 START ===")
     logging.info(f"BASE_DIR:   {BASE_DIR}")
-    logging.info(f"THRESHOLD:  RESERVE={THRESHOLD_RESERVE} WATCH={TRESHOLD_WATCH}")
-    logging.info(f"[BM-13] Signal Timeout: {TIMEOUT_BARS} bars | targets: {TIMEOUT_SIGNALS}")
+    logging.info(f"THRESHOLD:  RESERVE={THRESHOLD_RESERVE} WATCH={THRESHOLD_WATCH}")
+    logging.info(f"[BM-13] Signal Timeout: {TIMEOUT_BARS}bars | targets: {TIMEOUT_SIGNALS}")
     logging.info("[v3.8] FIX: fund_watch_primary + investor_stock_code_detect")
 
     trade_date = find_recent_trade_date()
@@ -494,7 +494,7 @@ def main():
     if investor_df is not None:
         logging.info(f"[v3.8] investor_df: {len(investor_df)} rows, columns: {list(investor_df.columns)}")
     else:
-        logging.warning(f"[v3.8] ICVESTOR_CSV not found: {INVESTOR_CSV}")
+        logging.warning(f"[v3.8] INVESTOR_CSV not found: {INVESTOR_CSV}")
 
     news_score_map    = load_news_score_map()
     fund_map          = load_fund_score_map()
