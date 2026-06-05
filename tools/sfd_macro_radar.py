@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Layer -2: SFD MACRO RADAR v1.1
+Layer -2: SFD MACRO RADAR v1.2
 ===============================
-[v1.0 → v1.1 변경사항]
+[v1.0 → v1.1 → v1.2 변경사항]
 - SECTOR_MACRO_MAP IndentationError 수정 (SEMICONDUCTOR 블록 포함 전체 재정렬)
 - fetch_macro_indicators: yfinance DataFrame 구조 대응 (MultiIndex 처리 추가)
+- DXY ticker: DXY=F (defunct) -> DX-Y.NYB (ICE futures, active)
 """
 
 import os
@@ -48,7 +49,7 @@ logger = logging.getLogger(__name__)
 
 # ===== MACRO INDICATORS =====
 INDICATORS = {
-    "DXY":      "DXY=F",    # 달러 인덱스
+    "DXY":      "DX-Y.NYB",    # 달러 인덱스
     "GOLD":     "GC=F",     # 금 선물
     "OIL":      "CL=F",     # WTI 유가
     "COPPER":   "HG=F",     # 구리 선물
@@ -126,7 +127,7 @@ SECTOR_MACRO_MAP = {
 def fetch_macro_indicators(lookback_days=5):
     """
     매크로 지표 수집 (yfinance)
-    [v1.1] MultiIndex DataFrame 대응 추가
+    [v1.2] MultiIndex DataFrame 대응 추가
     """
     logger.info("Fetching macro indicators from yfinance...")
     macros = {}
@@ -140,7 +141,7 @@ def fetch_macro_indicators(lookback_days=5):
                 logger.warning(f"No data for {key} ({ticker})")
                 continue
 
-            # [v1.1] MultiIndex 처리
+            # [v1.2] MultiIndex 처리
             close_col = None
             if isinstance(data.columns, pd.MultiIndex):
                 if "Close" in data.columns.get_level_values(0):
@@ -249,7 +250,7 @@ def calc_sector_boost(signals):
 
 # ===== MAIN =====
 def run():
-    logger.info("=== SFD MACRO RADAR v1.1 START ===")
+    logger.info("=== SFD MACRO RADAR v1.2 START ===")
     logger.info(f"OUTPUTS_DIR: {OUTPUTS_DIR}")
 
     macros  = fetch_macro_indicators(lookback_days=5)
@@ -285,7 +286,7 @@ def run():
         json.dump(meta, f, ensure_ascii=False, indent=2)
     logger.info(f"✅ {OUTPUT_JSON}")
 
-    logger.info("=== SFD MACRO RADAR v1.1 DONE ===")
+    logger.info("=== SFD MACRO RADAR v1.2 DONE ===")
 
 
 if __name__ == "__main__":
