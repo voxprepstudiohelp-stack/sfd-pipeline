@@ -1,8 +1,12 @@
 """
-sfd_investor_flow_fetch.py  v2.1
+sfd_investor_flow_fetch.py v2.2
 investor_flow 수집 -- KIS Developers API (Primary) / Fail-Safe (0)
+
+[v2.1 → v2.2 변경사항]
+- APP_KEY/APP_SECRET: os.environ 우선 읽기 + .env fallback
+  (GitHub Actions Secret 주입 대응 — .env 파일 없는 환경에서도 작동)
 """
-import time, datetime, requests, csv
+import os, time, datetime, requests, csv
 from pathlib import Path
 
 BASE_DIR   = Path(__file__).resolve().parent.parent
@@ -20,9 +24,11 @@ def load_env(path):
                 env[k.strip()] = v.strip()
     return env
 
-ENV        = load_env(ENV_FILE)
-APP_KEY    = ENV.get("KIS_APP_KEY", "")
-APP_SECRET = ENV.get("KIS_APP_SECRET", "")
+ENV = load_env(ENV_FILE)
+
+# [v2.2] os.environ 우선, .env fallback — GitHub Actions Secret 대응
+APP_KEY    = os.environ.get("KIS_APP_KEY")    or ENV.get("KIS_APP_KEY", "")
+APP_SECRET = os.environ.get("KIS_APP_SECRET") or ENV.get("KIS_APP_SECRET", "")
 BASE_URL   = "https://openapi.koreainvestment.com:9443"
 
 def get_access_token():
@@ -48,12 +54,12 @@ def fetch_investor(token, ticker):
                 "individual_net_buy": 0, "data_status": "FAIL"}
     url = BASE_URL + "/uapi/domestic-stock/v1/quotations/inquire-investor"
     headers = {
-        "content-type":  "application/json; charset=utf-8",
+        "content-type": "application/json; charset=utf-8",
         "authorization": "Bearer " + token,
-        "appkey":        APP_KEY,
-        "appsecret":     APP_SECRET,
-        "tr_id":         "FHKST01010900",
-        "custtype":      "P",
+        "appkey":    APP_KEY,
+        "appsecret": APP_SECRET,
+        "tr_id":     "FHKST01010900",
+        "custtype":  "P",
     }
     params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": ticker}
     try:
@@ -92,7 +98,7 @@ def main():
     today    = datetime.date.today().strftime("%Y-%m-%d")
     out_file = OUTPUT_DIR / "sfd_investor_flow_latest.csv"
     print("=" * 55)
-    print("[investor_flow v2.1]  " + today)
+    print("[investor_flow v2.2] " + today)
     print("=" * 55)
 
     token   = get_access_token()
@@ -108,16 +114,16 @@ def main():
     rows, ok_cnt = [], 0
     for i, ticker in enumerate(tickers):
         res = fetch_investor(token, ticker)
-        rows.append({"ticker": ticker,
-                     "foreign_net_buy":    res["foreign_net_buy"],
-                     "institution_net_buy":res["institution_net_buy"],
-                     "individual_net_buy": res["individual_net_buy"],
-                     "fetch_date":         today,
-                     "data_status":        res["data_status"]})
+        rows.append({"ticker":              ticker,
+                     "foreign_net_buy":     res["foreign_net_buy"],
+                     "institution_net_buy": res["institution_net_buy"],
+                     "individual_net_buy":  res["individual_net_buy"],
+                     "fetch_date":          today,
+                     "data_status":         res["data_status"]})
         if res["data_status"] == "OK":
             ok_cnt += 1
         if (i + 1) % 50 == 0:
-            print("  ... " + str(i+1) + "/" + str(len(tickers)) + " 처리 중 (OK: " + str(ok_cnt) + ")")
+            print(" ... " + str(i+1) + "/" + str(len(tickers)) + " 처리 중 (OK: " + str(ok_cnt) + ")")
         time.sleep(0.05)
 
     with open(out_file, "w", newline="", encoding="utf-8-sig") as f:
@@ -127,13 +133,13 @@ def main():
         writer.writeheader()
         writer.writerows(rows)
 
-    fail = sum(1 for r in rows if r["data_status"]=="FAIL")
-    zero = sum(1 for r in rows if r["data_status"]=="ZERO")
+    fail = sum(1 for r in rows if r["data_status"] == "FAIL")
+    zero = sum(1 for r in rows if r["data_status"] == "ZERO")
     print("\n[RESULT] " + str(out_file))
-    print("  OK   : " + str(ok_cnt) + "건")
-    print("  ZERO : " + str(zero) + "건  (API 정상, 당일 거래 없음)")
-    print("  FAIL : " + str(fail) + "건")
-    print("  총   : " + str(len(rows)) + "건")
+    print(" OK   : " + str(ok_cnt) + "건")
+    print(" ZERO : " + str(zero) + "건 (API 정상, 당일 거래 없음)")
+    print(" FAIL : " + str(fail) + "건")
+    print(" 총   : " + str(len(rows)) + "건")
 
 if __name__ == "__main__":
     main()
