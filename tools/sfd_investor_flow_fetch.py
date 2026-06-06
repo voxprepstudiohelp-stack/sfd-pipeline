@@ -1,8 +1,9 @@
 """
-sfd_investor_flow_fetch.py v2.2
+sfd_investor_flow_fetch.py v2.3
 investor_flow 수집 -- KIS Developers API (Primary) / Fail-Safe (0)
+[v2.3] signal_file: sfd_master_signal_latest.csv → sfd_master_signal_input.csv (항상 존재)
 
-[v2.1 → v2.2 변경사항]
+[v2.1 → v2.2 → v2.3 변경사항]
 - APP_KEY/APP_SECRET: os.environ 우선 읽기 + .env fallback
   (GitHub Actions Secret 주입 대응 — .env 파일 없는 환경에서도 작동)
 """
@@ -81,7 +82,7 @@ def fetch_investor(token, ticker):
                 "individual_net_buy": 0, "data_status": "FAIL"}
 
 def load_tickers():
-    signal_file = OUTPUT_DIR / "sfd_master_signal_latest.csv"
+    signal_file = BASE_DIR / "outputs" / "latest" / "sfd_master_signal_input.csv"  # [v2.3] input은 Layer1 직후 생성으로 항상 존재
     if not signal_file.exists():
         print("[WARN] sfd_master_signal_latest.csv 없음")
         return []
@@ -98,7 +99,7 @@ def main():
     today    = datetime.date.today().strftime("%Y-%m-%d")
     out_file = OUTPUT_DIR / "sfd_investor_flow_latest.csv"
     print("=" * 55)
-    print("[investor_flow v2.2] " + today)
+    print("[investor_flow v2.3] " + today)
     print("=" * 55)
 
     token   = get_access_token()
