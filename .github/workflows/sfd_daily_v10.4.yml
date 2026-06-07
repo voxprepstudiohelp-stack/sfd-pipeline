@@ -1,0 +1,173 @@
+name: SFD Daily Pipeline
+# Location: sfd-pipeline/.github/workflows/sfd_daily.yml
+# V10.4 | 2026-06-07 | Claude Sonnet 4.6
+#
+# [V10.3 -> V10.4 changes]
+# ① Layer 2.6c — investor_flow_fetch v2.3 step added (after sector_injector)
+# ② Make signal_input: outputs/latest/ copy added (P1 fix from V10.3)
+# ③ Layer 3b — backtest_analyzer step added (after backtest_d1)
+# ④ Layer 3c — threshold_optimizer step added (after backtest_analyzer)
+# ⑤ KIS_ACCT_PROD secret added to env
+
+on:
+  schedule:
+    # KST 08:35 = UTC 23:35 (Sun-Thu)
+    - cron: '35 23 * * 0-4'
+  workflow_dispatch:
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    env:
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      GDRIVE_LATEST_FOLDER_ID:     ${{ secrets.GDRIVE_LATEST_FOLDER_ID }}
+      GDRIVE_HISTORY_FOLDER_ID:    ${{ secrets.GDRIVE_HISTORY_FOLDER_ID }}
+      GDRIVE_INPUT_FOLDER_ID:      ${{ secrets.GDRIVE_INPUT_FOLDER_ID }}
+      GDRIVE_CLIENT_ID:            ${{ secrets.GDRIVE_CLIENT_ID }}
+      GDRIVE_CLIENT_SECRET:        ${{ secrets.GDRIVE_CLIENT_SECRET }}
+      GDRIVE_REFRESH_TOKEN:        ${{ secrets.GDRIVE_REFRESH_TOKEN }}
+      KIS_APP_KEY:                 ${{ secrets.KIS_APP_KEY }}
+      KIS_APP_SECRET:              ${{ secrets.KIS_APP_SECRET }}
+      KIS_ACCOUNT_NO:              ${{ secrets.KIS_ACCOUNT_NO }}
+      KIS_ACCT_PROD:               ${{ secrets.KIS_ACCT_PROD }}
+      DART_API_KEY:                ${{ secrets.DART_API_KEY }}
+      NAVER_CLIENT_ID:             ${{ secrets.NAVER_CLIENT_ID }}
+      NAVER_CLIENT_SECRET:         ${{ secrets.NAVER_CLIENT_SECRET }}
+      SFD_BASE_DIR: /tmp/sfd
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Make dirs + copy data
+        run: |
+          mkdir -p /tmp/sfd/outputs/latest /tmp/sfd/outputs/history /tmp/sfd/inputs /tmp/sfd/data
+          cp data/sfd_company_master_v1.4_sector_filled.csv /tmp/sfd/data/ || true
+          cp portfolio.json /tmp/sfd/data/ || true
+          cp portfolio.json /tmp/sfd/outputs/latest/ || true
+          cp portfolio.json /tmp/sfd/ || true
+          cp inputs/sfd_naver_news_queries.csv /tmp/sfd/inputs/ || true
+
+      # ── Layer -2: MACRO RADAR ──────────────────────────────────────────
+      - name: "Layer -2: MACRO RADAR"
+        run: python tools/sfd_macro_radar.py
+        continue-on-error: true
+
+      # ── Layer 0.5: GLOBAL TRIGGER ─────────────────────────────────────
+      - name: "Layer 0.5: GLOBAL TRIGGER"
+        run: python tools/sfd_global_trigger.py
+        continue-on-error: true
+
+      # ── Layer 1 ────────────────────────────────────────────────────────
+      - name: Layer 1 — prev_close_fetch
+        run: python tools/sfd_prev_close_fetch.py
+
+      - name: Make signal_input from prev_close
+        run: |
+          cp /tmp/sfd/inputs/sfd_prev_close_input.csv \
+             /tmp/sfd/inputs/sfd_master_signal_input.csv || true
+          cp /tmp/sfd/inputs/sfd_prev_close_input.csv \
+             /tmp/sfd/outputs/latest/sfd_prev_close_input.csv || true
+          echo "[OK] signal_input copied to inputs/ and outputs/latest/"
+          ls -la /tmp/sfd/inputs/
+
+      - name: Layer 1.5 — news_fetcher
+        run: python tools/sfd_news_fetcher.py
+        continue-on-error: true
+
+      - name: Layer 1.6 — event_calendar_builder
+        run: python tools/sfd_event_calendar_builder.py
+        continue-on-error: true
+
+      # ── Layer 1.8: 365 event calendar ─────────────────────────────────
+      - name: "Layer 1.8: 365_event_calendar"
+        run: python tools/sfd_365_event_calendar.py
+        continue-on-error: true
+
+      # ── Layer 2.7 / 2.8 ───────────────────────────────────────────────
+      - name: Layer 2.7 — technical_analyzer
+        run: python tools/sfd_technical_analyzer.py
+
+      - name: Verify technical output
+        run: |
+          if [ ! -f /tmp/sfd/outputs/latest/sfd_technical_latest.csv ]; then
+            echo "ERROR: sfd_technical_latest.csv not found"
+            ls -la /tmp/sfd/outputs/latest/ || true
+            exit 1
+          fi
+          echo "OK: $(wc -l < /tmp/sfd/outputs/latest/sfd_technical_latest.csv) lines"
+
+      - name: Layer 2.8 — oscillation_analyzer
+        run: python tools/sfd_oscillation_analyzer.py
+        continue-on-error: true
+
+      # ── Layer 2: signal_aggregator Pass1 ──────────────────────────────
+      - name: "Layer 2 Pass1 — signal_aggregator (pre-fund)"
+        run: python tools/sfd_signal_aggregator.py
+
+      - name: Layer 2.5 — rerating_watch
+        run: python tools/sfd_rerating_watch.py
+        continue-on-error: true
+
+      # ── Layer 2.6: fundamental + sector ───────────────────────────────
+      - name: Layer 2.6 — fundamental_watch
+        run: python tools/sfd_fundamental_watch.py
+        continue-on-error: true
+
+      - name: Layer 2.6b — sector_injector
+        run: python tools/sfd_sector_injector.py
+        continue-on-error: true
+
+      # ── [V10.4 NEW] Layer 2.6c: investor_flow_fetch ───────────────────
+      - name: "Layer 2.6c — investor_flow_fetch"
+        run: python tools/sfd_investor_flow_fetch.py
+        continue-on-error: true
+
+      # ── Layer 2 Pass2: signal_aggregator (with fund+investor) ─────────
+      - name: "Layer 2 Pass2 — signal_aggregator (final)"
+        run: python tools/sfd_signal_aggregator.py
+
+      # ── Layer 3: backtest ─────────────────────────────────────────────
+      - name: Layer 3 — backtest_d1
+        run: python tools/sfd_backtest_d1.py
+        continue-on-error: true
+
+      # ── [V10.4 NEW] Layer 3b: backtest_analyzer ───────────────────────
+      - name: "Layer 3b — backtest_analyzer"
+        run: python tools/sfd_backtest_analyzer.py
+        continue-on-error: true
+
+      # ── [V10.4 NEW] Layer 3c: threshold_optimizer ─────────────────────
+      - name: "Layer 3c — threshold_optimizer"
+        run: python tools/sfd_threshold_optimizer.py
+        continue-on-error: true
+
+      # ── Layer 4 ~ 5.5 ─────────────────────────────────────────────────
+      - name: Layer 4 — finalize
+        run: python tools/sfd_finalize.py
+        continue-on-error: true
+
+      - name: Layer 5 — portfolio_monitor
+        run: python tools/sfd_portfolio_monitor.py
+        continue-on-error: true
+
+      - name: "Layer 5.5 — trade_guardian"
+        env:
+          SFD_BASE_DIR: /tmp/sfd
+        run: python tools/sfd_trade_guardian.py
+        continue-on-error: true
+
+      # ── Upload ─────────────────────────────────────────────────────────
+      - name: Upload latest to Drive
+        run: python utils/gdrive_uploader.py
