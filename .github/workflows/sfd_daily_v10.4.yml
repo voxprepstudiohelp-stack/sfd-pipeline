@@ -8,6 +8,11 @@ name: SFD Daily Pipeline
 # ③ Layer 3b — backtest_analyzer step added (after backtest_d1)
 # ④ Layer 3c — threshold_optimizer step added (after backtest_analyzer)
 # ⑤ KIS_ACCT_PROD secret added to env
+#
+# [V10.4 updates — BM-6/7/8]
+# ⑥ Layer 0.8 — hoga_score (BM-8) added right after Layer 0.5 (08:35~08:55 pre-open 최적)
+# ⑦ Layer 2.5b — sector_strength (BM-6) added after Pass1 + rerating_watch
+# ⑧ Layer 2.5c — dart_booster (BM-7) added after sector_strength
 
 on:
   schedule:
@@ -69,6 +74,11 @@ jobs:
         run: python tools/sfd_global_trigger.py
         continue-on-error: true
 
+      # ── Layer 0.8: HOGA SCORE (BM-8) — 08:35~08:55 pre-open 최적 ─────
+      - name: "Layer 0.8 — hoga_score (BM-8)"
+        run: python tools/sfd_hoga_score.py
+        continue-on-error: true
+
       # ── Layer 1 ────────────────────────────────────────────────────────
       - name: Layer 1 — prev_close_fetch
         run: python tools/sfd_prev_close_fetch.py
@@ -118,6 +128,16 @@ jobs:
 
       - name: Layer 2.5 — rerating_watch
         run: python tools/sfd_rerating_watch.py
+        continue-on-error: true
+
+      # ── [BM-6] Layer 2.5b: sector_strength ───────────────────────────
+      - name: "Layer 2.5b — sector_strength (BM-6)"
+        run: python tools/sfd_sector_strength.py
+        continue-on-error: true
+
+      # ── [BM-7] Layer 2.5c: dart_booster ──────────────────────────────
+      - name: "Layer 2.5c — dart_booster (BM-7)"
+        run: python tools/sfd_dart_booster.py
         continue-on-error: true
 
       # ── Layer 2.6: fundamental + sector ───────────────────────────────
