@@ -37,6 +37,18 @@ if ($confirm -notin @("Y", "y")) {
 
 Write-Host ""
 
+# ── Preflight gate ────────────────────────────────────────────────────────
+Write-Host "[PRE] Preflight 검사 실행 중..." -ForegroundColor Cyan
+$preflightScript = Join-Path $repoRoot "tools\sfd_preflight.py"
+py $preflightScript
+if ($LASTEXITCODE -ne 0) {
+    Write-Host ""
+    Write-Host "[ABORT] PREFLIGHT FAIL -- 배포를 중단합니다." -ForegroundColor Red
+    Write-Host "        위 출력의 FAIL 항목을 해결한 뒤 재실행하세요." -ForegroundColor Red
+    exit 1
+}
+Write-Host ""
+
 # ── Step 0: 사전 점검 ────────────────────────────────────────────────────
 if (-not (Test-Path $srcYml)) {
     Write-Host "[ERROR] 소스 파일 없음: $srcYml" -ForegroundColor Red
