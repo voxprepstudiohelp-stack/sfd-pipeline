@@ -173,3 +173,30 @@ Holdings have `grade` (A/B/C), `trigger_pct`, `trigger_price`, `current_step`, `
 - Save to Google Drive (parentId: 1p2ZTMfjW7HJx49GDXiL5loQjQp22SHkN)
 - Notion: Drive link only (no full text duplication)
 - Always provide next-session start phrase in code block
+
+## Benchmarking & Competitive Intelligence Schedule
+
+### Session Counter (update every session)
+- Sessions since last benchmark: 0  ← Claude Code가 매 세션 시작 시 +1 업데이트
+- Last benchmark date: 2026-06-07
+- Next benchmark due: every 5 sessions OR major milestone
+
+### Benchmarking Checklist (every 5 sessions)
+- [ ] Korean quant platforms: 키움 영웅문AI, 신한 알파, 미래에셋 TIGER
+- [ ] Global AI trading: Alpaca, Composer, Tickeron, Trade Ideas
+- [ ] Open source: FinRL, OpenBB, Qlib, QuantConnect
+- [ ] TradingView: top screener strategies, new indicators
+- [ ] SFD signal quality vs market benchmark (KOSPI/KOSDAQ return)
+- Record results in SESSION_BRIEF under [벤치마킹 메모] section
+- Save full report to Drive: H:\내 드라이브\AI_WorkSpace\I_SFC\10_Useful information\
+
+### Competitive Intelligence Targets
+- Signal architecture comparison (score components vs competitors)
+- Backtest methodology comparison
+- New BM candidates from competitor features
+- Run sfd_competitive_scan.py monthly
+
+### Auto-improvement Loop
+- After every 30+ days of backtest data: run sfd_threshold_optimizer.py --apply
+- After every 10 sessions: review ANOMALY log from sfd_signal_quality.py
+- After every major Run: update SESSION_BRIEF with signal quality delta
