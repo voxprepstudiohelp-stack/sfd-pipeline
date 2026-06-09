@@ -1,20 +1,21 @@
-# sfd_signal_aggregator.py | v3.6 | Claude (Anthropic) 2026-06-09
+# sfd_signal_aggregator.py | v3.7 | Claude (Anthropic) 2026-06-09
 # Deploy to: sfd-pipeline/sfd_signal_aggregator.py
 #
-# [v3.5 → v3.6 변경사항]
-# - [BM-14] AI Candle Pattern Recognition 통합
-#     calculate_candle_score() → -10 ~ +15pt
-#     apply_candle_score_to_tech() → tech_score에 합산 후 85pt 캡 적용
-#     신규 출력 컬럼: candle_score, candle_pattern
-#     OHLCV 없을 경우 candle_score=0, candle_pattern='NONE' (graceful fallback)
+# [v3.6 → v3.7 변경사항]
+# - [BM-16] Earnings Surprise Detector 통합
+#     get_earnings_surprise_score() → -3 ~ +5pt
+#     fund_score에 합산 후 15pt 캡 유지
+#     신규 출력 컬럼: earnings_score
+#     DART_API_KEY 미설정 / API 실패 시 graceful fallback (score=0)
 #
-# [스코어 아키텍처 현황 v3.6]
+# [스코어 아키텍처 현황 v3.7]
 # total = tech(max85, candle 포함) + news(max30) + investor(max20)
-#       + theme(max10) + fund(max15) + bias_filter(±5) + vol_surge(0~10)
-#       + zone_pullback(0~15)  max=205pt
+#       + theme(max10) + fund(max15, earnings 포함) + bias_filter(±5)
+#       + vol_surge(0~10) + zone_pullback(0~15)  max=205pt
 # 신호 오버라이드: NO_TRADE > SIGNAL_EXPIRED > raw_signal
 #
-# [v3.5 유지사항]
+# [v3.6 유지사항]
+# - BM-14 Candle Pattern Recognition
 # - FIX-1~5: news/fund/investor 경로·컬럼 수정
 # - tech_total_score 컬럼명 자동탐지
 # - BM-13 Signal Timeout State Machine
@@ -40,6 +41,13 @@ try:
     _HAS_CANDLE = True
 except ImportError:
     _HAS_CANDLE = False
+
+# ── [BM-16] Earnings Surprise ─────────────────────────────────────────────────
+try:
+    from tools.sfd_earnings_surprise import get_earnings_surprise_score
+    _HAS_EARNINGS = True
+except ImportError:
+    _HAS_EARNINGS = False
 
 # ── 경로 설정 ──────────────────────────────────────────────────────────────────
 _env_base = os.environ.get("SFD_BASE_DIR", "")
@@ -485,6 +493,7 @@ def main():
     logging.info(f"[BM-13] Signal Timeout: {TIMEOUT_BARS}봉 | 대상: {TIMEOUT_SIGNALS}")
     logging.info("[v3.5] FIX: news_path + fund_path + fund_col + investor_raw")
     logging.info(f"[BM-14] candle_pattern available={_HAS_CANDLE}")
+    logging.info(f"[BM-16] earnings_surprise available={_HAS_EARNINGS}")
 
     trade_date = find_recent_trade_date()
     logging.info(f"trade_date: {trade_date}")
@@ -618,6 +627,16 @@ def main():
         ths_score = score_theme(ticker, prev_df)
         f_score   = score_fundamental(ticker, fund_map)
 
+        # ── [BM-16] Earnings Surprise Score ───────────────────────────────
+        earnings_score = 0.0
+        if _HAS_EARNINGS:
+            try:
+                er = get_earnings_surprise_score(ticker)
+                earnings_score = float(er.get("earnings_score", 0))
+                f_score = min(round(f_score + earnings_score, 2), FUND_MAX_PT)
+            except Exception:
+                pass
+
         zp_data  = zone_pullback_map.get(ticker, {})
         zp_score = float(zp_data.get("zone_pullback_score", 0) or 0)
         zp_label = str(zp_data.get("zone_pullback_label", "") or "")
@@ -680,6 +699,7 @@ def main():
             "zone_pullback_label":  zp_label,
             "candle_score":         candle_score,       # ★ BM-14
             "candle_pattern":       candle_pattern,     # ★ BM-14
+            "earnings_score":       earnings_score,     # ★ BM-16
             "tech_ver":             tech_ver,
         })
 
@@ -706,13 +726,14 @@ def main():
     news_nonzero = len(df_out[df_out["news_score"] > 0])
     fund_nonzero = len(df_out[df_out["fund_score"] > 0])
     inv_nonzero  = len(df_out[df_out["investor_score"] > 0])
-    candle_hit   = len(df_out[df_out["candle_pattern"] != "NONE"]) if "candle_pattern" in df_out.columns else 0
+    candle_hit    = len(df_out[df_out["candle_pattern"] != "NONE"]) if "candle_pattern" in df_out.columns else 0
+    earn_nonzero  = len(df_out[df_out["earnings_score"] != 0]) if "earnings_score" in df_out.columns else 0
 
     logging.info(
         f"DONE | RESERVE={reserve} WATCH={watch} NO_TRADE={no_trade_ct} "
         f"[BM-13]EXPIRED={expired_ct} [BM-12]zp={zp_nonzero} "
         f"[BM-10]vs={vs_nonzero} [BM-3]+{bias_up}/-{bias_down} "
-        f"[BM-14]candle={candle_hit} "
+        f"[BM-14]candle={candle_hit} [BM-16]earn={earn_nonzero} "
         f"news={news_nonzero} fund={fund_nonzero} investor={inv_nonzero} "
         f"elapsed={elapsed}s MODE={MODE}"
     )
@@ -720,7 +741,7 @@ def main():
         f"[OK] RESERVE={reserve} | WATCH={watch} | NO_TRADE={no_trade_ct} | "
         f"[BM-13]EXPIRED={expired_ct} | [BM-12]zp={zp_nonzero} | "
         f"[BM-10]vs={vs_nonzero} | [BM-3]+{bias_up}/-{bias_down} | "
-        f"[BM-14]candle={candle_hit} | "
+        f"[BM-14]candle={candle_hit} | [BM-16]earn={earn_nonzero} | "
         f"news={news_nonzero} | fund={fund_nonzero} | investor={inv_nonzero} | "
         f"elapsed={elapsed}s | MODE={MODE}"
     )
