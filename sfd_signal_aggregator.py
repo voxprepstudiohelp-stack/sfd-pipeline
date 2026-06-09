@@ -1,7 +1,12 @@
-# sfd_signal_aggregator.py | v3.8 | Claude (Anthropic) 2026-06-09
+# sfd_signal_aggregator.py | v3.9 | Claude (Anthropic) 2026-06-09
 # Deploy to: sfd-pipeline/sfd_signal_aggregator.py
 #
-# [v3.7 → v3.8 변경사항]
+# [v3.8 → v3.9 변경사항]
+# - [BM-18] Alpha Decay Monitor 통합 (Pass3 후단, df_out 빌드 직후)
+#     apply_alpha_decay(df_out) → decay_penalty, decay_bar_age 컬럼 추가
+#     _HAS_ALPHA_DECAY=False 시 두 컬럼 0으로 graceful fallback
+#
+# [v3.8 유지사항]
 # - [BM-15] AI 목표주가 자동 산출 통합 (독립 참고 지표)
 #     get_target_price_score() → tp_score, upside_pct
 #     total_score 미반영 (추후 가중치 결정)
@@ -56,6 +61,13 @@ try:
     _HAS_EARNINGS = True
 except ImportError:
     _HAS_EARNINGS = False
+
+# ── [BM-18] Alpha Decay ───────────────────────────────────────────────────────
+try:
+    from tools.sfd_alpha_decay import apply_alpha_decay
+    _HAS_ALPHA_DECAY = True
+except ImportError:
+    _HAS_ALPHA_DECAY = False
 
 # ── 경로 설정 ──────────────────────────────────────────────────────────────────
 _env_base = os.environ.get("SFD_BASE_DIR", "")
@@ -503,6 +515,7 @@ def main():
     logging.info(f"[BM-14] candle_pattern available={_HAS_CANDLE}")
     logging.info(f"[BM-15] target_price available={_HAS_TP} (ref only, total 미반영)")
     logging.info(f"[BM-16] earnings_surprise available={_HAS_EARNINGS}")
+    logging.info(f"[BM-18] alpha_decay available={_HAS_ALPHA_DECAY}")
 
     trade_date = find_recent_trade_date()
     logging.info(f"trade_date: {trade_date}")
@@ -730,6 +743,20 @@ def main():
     df_out = (pd.DataFrame(results)
               .sort_values("total_score", ascending=False)
               .reset_index(drop=True))
+
+    # ── [BM-18] Alpha Decay ───────────────────────────────────────────────────
+    if _HAS_ALPHA_DECAY:
+        try:
+            df_out = apply_alpha_decay(df_out)
+        except Exception as e:
+            logging.warning(f"[BM-18] alpha decay error: {e}")
+            df_out["decay_penalty"] = 0.0
+            df_out["decay_bar_age"] = 0
+    else:
+        df_out["decay_penalty"] = 0.0
+        df_out["decay_bar_age"] = 0
+    # ─────────────────────────────────────────────────────────────────────────
+
     df_out.to_csv(LATEST_CSV, index=False, encoding="utf-8-sig")
     df_out.to_csv(
         os.path.join(HISTORY_DIR, f"sfd_master_signal_{trade_date}.csv"),
@@ -751,12 +778,14 @@ def main():
     candle_hit    = len(df_out[df_out["candle_pattern"] != "NONE"]) if "candle_pattern" in df_out.columns else 0
     earn_nonzero  = len(df_out[df_out["earnings_score"] != 0]) if "earnings_score" in df_out.columns else 0
     tp_hit        = len(df_out[df_out["tp_score"] != 0]) if "tp_score" in df_out.columns else 0
+    decay_hit     = len(df_out[df_out["decay_penalty"] != 0]) if "decay_penalty" in df_out.columns else 0
 
     logging.info(
         f"DONE | RESERVE={reserve} WATCH={watch} NO_TRADE={no_trade_ct} "
         f"[BM-13]EXPIRED={expired_ct} [BM-12]zp={zp_nonzero} "
         f"[BM-10]vs={vs_nonzero} [BM-3]+{bias_up}/-{bias_down} "
-        f"[BM-14]candle={candle_hit} [BM-15]tp={tp_hit}(ref) [BM-16]earn={earn_nonzero} "
+        f"[BM-14]candle={candle_hit} [BM-15]tp={tp_hit}(ref) "
+        f"[BM-16]earn={earn_nonzero} [BM-18]decay={decay_hit} "
         f"news={news_nonzero} fund={fund_nonzero} investor={inv_nonzero} "
         f"elapsed={elapsed}s MODE={MODE}"
     )
@@ -764,7 +793,8 @@ def main():
         f"[OK] RESERVE={reserve} | WATCH={watch} | NO_TRADE={no_trade_ct} | "
         f"[BM-13]EXPIRED={expired_ct} | [BM-12]zp={zp_nonzero} | "
         f"[BM-10]vs={vs_nonzero} | [BM-3]+{bias_up}/-{bias_down} | "
-        f"[BM-14]candle={candle_hit} | [BM-15]tp={tp_hit}(ref) | [BM-16]earn={earn_nonzero} | "
+        f"[BM-14]candle={candle_hit} | [BM-15]tp={tp_hit}(ref) | "
+        f"[BM-16]earn={earn_nonzero} | [BM-18]decay={decay_hit} | "
         f"news={news_nonzero} | fund={fund_nonzero} | investor={inv_nonzero} | "
         f"elapsed={elapsed}s | MODE={MODE}"
     )
