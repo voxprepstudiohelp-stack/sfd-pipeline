@@ -1,23 +1,21 @@
-# sfd_signal_aggregator.py | v3.5 | Claude (Anthropic) 2026-06-03
+# sfd_signal_aggregator.py | v3.6 | Claude (Anthropic) 2026-06-09
 # Deploy to: sfd-pipeline/sfd_signal_aggregator.py
 #
-# [v3.4 → v3.5 변경사항]
-# - [FIX-1] NEWS_SCORE_CSV: sfd_news_sentiment_latest.csv → sfd_news_score_latest.csv
-# - [FIX-2] FUNDAMENTAL_CSV: sfd_fundamental_watch_latest.csv → sfd_fundamental_latest.csv
-# - [FIX-3] load_fund_score_map: "fund_score" → "adjusted_fund_score" 컬럼 탐지
-# - [FIX-4] score_investor: investor_score 컬럼 없는 raw 데이터 처리
-#           foreign_net_buy(+10) + institution_net_buy(+10) 직접 계산 유지
-#           단, data_status=="ZERO" 또는 "FAIL" 시 0점 처리 추가
-# - [FIX-5] theme: sfd_theme_score_latest.csv 미존재 시 0점 graceful 처리 (기존 동일)
-#           → score_theme fallback: prev_value 컬럼 없으면 0 반환 (기존 동일)
+# [v3.5 → v3.6 변경사항]
+# - [BM-14] AI Candle Pattern Recognition 통합
+#     calculate_candle_score() → -10 ~ +15pt
+#     apply_candle_score_to_tech() → tech_score에 합산 후 85pt 캡 적용
+#     신규 출력 컬럼: candle_score, candle_pattern
+#     OHLCV 없을 경우 candle_score=0, candle_pattern='NONE' (graceful fallback)
 #
-# [스코어 아키텍처 현황 v3.5]
-# total = tech(max85) + news(max30) + investor(max20)
+# [스코어 아키텍처 현황 v3.6]
+# total = tech(max85, candle 포함) + news(max30) + investor(max20)
 #       + theme(max10) + fund(max15) + bias_filter(±5) + vol_surge(0~10)
-#       + zone_pullback(0~15)  max=190pt
+#       + zone_pullback(0~15)  max=205pt
 # 신호 오버라이드: NO_TRADE > SIGNAL_EXPIRED > raw_signal
 #
-# [v3.4 유지사항]
+# [v3.5 유지사항]
+# - FIX-1~5: news/fund/investor 경로·컬럼 수정
 # - tech_total_score 컬럼명 자동탐지
 # - BM-13 Signal Timeout State Machine
 # - BM-12 zone_pullback_score
@@ -35,6 +33,13 @@ from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
 import FinanceDataReader as fdr
+
+# ── [BM-14] Candle Pattern ────────────────────────────────────────────────────
+try:
+    from tools.sfd_candle_pattern import calculate_candle_score, apply_candle_score_to_tech
+    _HAS_CANDLE = True
+except ImportError:
+    _HAS_CANDLE = False
 
 # ── 경로 설정 ──────────────────────────────────────────────────────────────────
 _env_base = os.environ.get("SFD_BASE_DIR", "")
@@ -149,6 +154,20 @@ def get_technical_data(ticker, end_date):
             "close":    last["Close"],
         }
     except: return None
+
+
+# ── [BM-14] OHLCV DataFrame 취득 ─────────────────────────────────────────────
+def get_ohlcv_df(ticker: str, end_date: str, n_bars: int = 25):
+    """캔들 패턴 분석용 OHLCV DataFrame 반환 (최근 n_bars 봉)."""
+    try:
+        end   = datetime.strptime(end_date, "%Y%m%d")
+        start = (end - timedelta(days=n_bars + 40)).strftime("%Y-%m-%d")
+        df    = fdr.DataReader(ticker, start, end.strftime("%Y-%m-%d"))
+        if df is None or len(df) < 5:
+            return None
+        return df.sort_index().tail(n_bars)
+    except:
+        return None
 
 
 # ── 스코어 함수들 ──────────────────────────────────────────────────────────────
@@ -460,11 +479,12 @@ def load_fund_score_map() -> dict:
 
 # ── MAIN ───────────────────────────────────────────────────────────────────────
 def main():
-    logging.info("=== sfd_signal_aggregator v3.5 START ===")
+    logging.info("=== sfd_signal_aggregator v3.6 START ===")
     logging.info(f"BASE_DIR:   {BASE_DIR}")
     logging.info(f"THRESHOLD:  RESERVE={THRESHOLD_RESERVE} WATCH={THRESHOLD_WATCH}")
     logging.info(f"[BM-13] Signal Timeout: {TIMEOUT_BARS}봉 | 대상: {TIMEOUT_SIGNALS}")
     logging.info("[v3.5] FIX: news_path + fund_path + fund_col + investor_raw")
+    logging.info(f"[BM-14] candle_pattern available={_HAS_CANDLE}")
 
     trade_date = find_recent_trade_date()
     logging.info(f"trade_date: {trade_date}")
@@ -582,6 +602,17 @@ def main():
             else:
                 bias_score = waist_line = price_vs_waist_pct = 0
 
+        # ── [BM-14] Candle Pattern Score ──────────────────────────────────
+        candle_score   = 0
+        candle_pattern = "NONE"
+        if _HAS_CANDLE:
+            ohlcv_df = get_ohlcv_df(ticker, trade_date)
+            if ohlcv_df is not None:
+                candle_result  = calculate_candle_score(ohlcv_df)
+                t_score        = apply_candle_score_to_tech(t_score, candle_result)
+                candle_score   = candle_result.get("candle_score", 0)
+                candle_pattern = candle_result.get("pattern", "NONE")
+
         n_score   = score_news(ticker, news_score_map)
         i_score   = score_investor(ticker, investor_df)
         ths_score = score_theme(ticker, prev_df)
@@ -647,6 +678,8 @@ def main():
             "price_vs_waist_pct":   price_vs_waist_pct,
             "zone_pullback_score":  zp_score,
             "zone_pullback_label":  zp_label,
+            "candle_score":         candle_score,       # ★ BM-14
+            "candle_pattern":       candle_pattern,     # ★ BM-14
             "tech_ver":             tech_ver,
         })
 
@@ -673,11 +706,13 @@ def main():
     news_nonzero = len(df_out[df_out["news_score"] > 0])
     fund_nonzero = len(df_out[df_out["fund_score"] > 0])
     inv_nonzero  = len(df_out[df_out["investor_score"] > 0])
+    candle_hit   = len(df_out[df_out["candle_pattern"] != "NONE"]) if "candle_pattern" in df_out.columns else 0
 
     logging.info(
         f"DONE | RESERVE={reserve} WATCH={watch} NO_TRADE={no_trade_ct} "
         f"[BM-13]EXPIRED={expired_ct} [BM-12]zp={zp_nonzero} "
         f"[BM-10]vs={vs_nonzero} [BM-3]+{bias_up}/-{bias_down} "
+        f"[BM-14]candle={candle_hit} "
         f"news={news_nonzero} fund={fund_nonzero} investor={inv_nonzero} "
         f"elapsed={elapsed}s MODE={MODE}"
     )
@@ -685,6 +720,7 @@ def main():
         f"[OK] RESERVE={reserve} | WATCH={watch} | NO_TRADE={no_trade_ct} | "
         f"[BM-13]EXPIRED={expired_ct} | [BM-12]zp={zp_nonzero} | "
         f"[BM-10]vs={vs_nonzero} | [BM-3]+{bias_up}/-{bias_down} | "
+        f"[BM-14]candle={candle_hit} | "
         f"news={news_nonzero} | fund={fund_nonzero} | investor={inv_nonzero} | "
         f"elapsed={elapsed}s | MODE={MODE}"
     )
