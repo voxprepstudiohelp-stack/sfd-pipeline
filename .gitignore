@@ -1,0 +1,6 @@
+
+inputs/
+outputs/
+tools/__pycache__/
+
+tools/fix_*.py
