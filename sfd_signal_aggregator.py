@@ -1,17 +1,18 @@
-# sfd_signal_aggregator.py | v3.7 | Claude (Anthropic) 2026-06-09
+# sfd_signal_aggregator.py | v3.8 | Claude (Anthropic) 2026-06-09
 # Deploy to: sfd-pipeline/sfd_signal_aggregator.py
 #
-# [v3.6 → v3.7 변경사항]
-# - [BM-16] Earnings Surprise Detector 통합
-#     get_earnings_surprise_score() → -3 ~ +5pt
-#     fund_score에 합산 후 15pt 캡 유지
-#     신규 출력 컬럼: earnings_score
-#     DART_API_KEY 미설정 / API 실패 시 graceful fallback (score=0)
+# [v3.7 → v3.8 변경사항]
+# - [BM-15] AI 목표주가 자동 산출 통합 (독립 참고 지표)
+#     get_target_price_score() → tp_score, upside_pct
+#     total_score 미반영 (추후 가중치 결정)
+#     신규 출력 컬럼: tp_score, upside_pct
+#     DART/Naver 조회 실패 시 graceful fallback (tp_score=0)
 #
-# [스코어 아키텍처 현황 v3.7]
+# [스코어 아키텍처 현황 v3.8]
 # total = tech(max85, candle 포함) + news(max30) + investor(max20)
 #       + theme(max10) + fund(max15, earnings 포함) + bias_filter(±5)
 #       + vol_surge(0~10) + zone_pullback(0~15)  max=205pt
+# 참고 컬럼(total 미반영): tp_score, upside_pct  ← BM-15
 # 신호 오버라이드: NO_TRADE > SIGNAL_EXPIRED > raw_signal
 #
 # [v3.6 유지사항]
@@ -41,6 +42,13 @@ try:
     _HAS_CANDLE = True
 except ImportError:
     _HAS_CANDLE = False
+
+# ── [BM-15] Target Price ──────────────────────────────────────────────────────
+try:
+    from tools.sfd_target_price import get_target_price_score
+    _HAS_TP = True
+except ImportError:
+    _HAS_TP = False
 
 # ── [BM-16] Earnings Surprise ─────────────────────────────────────────────────
 try:
@@ -493,6 +501,7 @@ def main():
     logging.info(f"[BM-13] Signal Timeout: {TIMEOUT_BARS}봉 | 대상: {TIMEOUT_SIGNALS}")
     logging.info("[v3.5] FIX: news_path + fund_path + fund_col + investor_raw")
     logging.info(f"[BM-14] candle_pattern available={_HAS_CANDLE}")
+    logging.info(f"[BM-15] target_price available={_HAS_TP} (ref only, total 미반영)")
     logging.info(f"[BM-16] earnings_surprise available={_HAS_EARNINGS}")
 
     trade_date = find_recent_trade_date()
@@ -611,6 +620,17 @@ def main():
             else:
                 bias_score = waist_line = price_vs_waist_pct = 0
 
+        # ── [BM-15] Target Price Score (참고 지표, total 미반영) ──────────
+        tp_score   = 0.0
+        upside_pct = 0.0
+        if _HAS_TP:
+            try:
+                tpr        = get_target_price_score(ticker)
+                tp_score   = float(tpr.get("tp_score",   0))
+                upside_pct = float(tpr.get("upside_pct", 0))
+            except Exception:
+                pass
+
         # ── [BM-14] Candle Pattern Score ──────────────────────────────────
         candle_score   = 0
         candle_pattern = "NONE"
@@ -697,6 +717,8 @@ def main():
             "price_vs_waist_pct":   price_vs_waist_pct,
             "zone_pullback_score":  zp_score,
             "zone_pullback_label":  zp_label,
+            "tp_score":             tp_score,           # ★ BM-15 (ref)
+            "upside_pct":           upside_pct,         # ★ BM-15 (ref)
             "candle_score":         candle_score,       # ★ BM-14
             "candle_pattern":       candle_pattern,     # ★ BM-14
             "earnings_score":       earnings_score,     # ★ BM-16
@@ -728,12 +750,13 @@ def main():
     inv_nonzero  = len(df_out[df_out["investor_score"] > 0])
     candle_hit    = len(df_out[df_out["candle_pattern"] != "NONE"]) if "candle_pattern" in df_out.columns else 0
     earn_nonzero  = len(df_out[df_out["earnings_score"] != 0]) if "earnings_score" in df_out.columns else 0
+    tp_hit        = len(df_out[df_out["tp_score"] != 0]) if "tp_score" in df_out.columns else 0
 
     logging.info(
         f"DONE | RESERVE={reserve} WATCH={watch} NO_TRADE={no_trade_ct} "
         f"[BM-13]EXPIRED={expired_ct} [BM-12]zp={zp_nonzero} "
         f"[BM-10]vs={vs_nonzero} [BM-3]+{bias_up}/-{bias_down} "
-        f"[BM-14]candle={candle_hit} [BM-16]earn={earn_nonzero} "
+        f"[BM-14]candle={candle_hit} [BM-15]tp={tp_hit}(ref) [BM-16]earn={earn_nonzero} "
         f"news={news_nonzero} fund={fund_nonzero} investor={inv_nonzero} "
         f"elapsed={elapsed}s MODE={MODE}"
     )
@@ -741,7 +764,7 @@ def main():
         f"[OK] RESERVE={reserve} | WATCH={watch} | NO_TRADE={no_trade_ct} | "
         f"[BM-13]EXPIRED={expired_ct} | [BM-12]zp={zp_nonzero} | "
         f"[BM-10]vs={vs_nonzero} | [BM-3]+{bias_up}/-{bias_down} | "
-        f"[BM-14]candle={candle_hit} | [BM-16]earn={earn_nonzero} | "
+        f"[BM-14]candle={candle_hit} | [BM-15]tp={tp_hit}(ref) | [BM-16]earn={earn_nonzero} | "
         f"news={news_nonzero} | fund={fund_nonzero} | investor={inv_nonzero} | "
         f"elapsed={elapsed}s | MODE={MODE}"
     )
