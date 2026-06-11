@@ -61,6 +61,7 @@ NO_TRADE_JSON       = os.path.join(LATEST_DIR, "sfd_no_trade_tickers.json")
 ZONE_PULLBACK_CSV   = os.path.join(LATEST_DIR, "sfd_zone_pullback_latest.csv")
 TIMEOUT_STATE_JSON  = os.path.join(LATEST_DIR, "signal_timeout_state.json")
 ALPHA_DECAY_CSV     = os.path.join(LATEST_DIR, "bm18_alpha_decay.csv")  # [BM-18]
+W52H_CSV            = os.path.join(LATEST_DIR, "sfd_52w_high_latest.csv")  # [BM-19]
 
 logging.basicConfig(
     handlers=[
@@ -302,6 +303,27 @@ def load_decay_score_map() -> dict:
         return {}
 
 
+# -- [BM-19] 52w High Proximity --─────────────────────────────────────────────
+def load_52w_score_map() -> dict:
+    if not os.path.exists(W52H_CSV):
+        logging.info("[BM-19] sfd_52w_high_latest.csv not found -> score=0")
+        return {}
+    try:
+        df = pd.read_csv(W52H_CSV, dtype={"ticker": str})
+        result = {}
+        for _, row in df.iterrows():
+            result[str(row["ticker"]).zfill(6)] = {
+                "score_52w":     float(row.get("score_52w",     0) or 0),
+                "high_52w":      float(row.get("high_52w",      0) or 0),
+                "proximity_pct": float(row.get("proximity_pct", 0) or 0),
+            }
+        logging.info(f"[BM-19] 52w_map: {len(result)}종목")
+        return result
+    except Exception as e:
+        logging.warning(f"[BM-19] 52w_map 로드 실패: {e}")
+        return {}
+
+
 # -- [BM-13] Signal Timeout State Machine --───────────────────────────────────
 def load_timeout_state() -> dict:
     if not os.path.exists(TIMEOUT_STATE_JSON):
@@ -525,6 +547,7 @@ def main():
     zone_pullback_map = load_zone_pullback_map()
     timeout_state     = load_timeout_state()
     decay_map         = load_decay_score_map()  # [BM-18]
+    w52h_map          = load_52w_score_map()     # [BM-19]
 
     use_tech_detail = len(tech_detail_map) > 0
     logging.info(
@@ -631,8 +654,11 @@ def main():
         decay_score = float(dc_data.get("decay_score", 0))
         decay_flag  = str(dc_data.get("decay_flag", "FRESH"))
 
+        w52h_data  = w52h_map.get(ticker, {})  # [BM-19]
+        score_52w  = float(w52h_data.get("score_52w", 0))
+
         total      = (t_score + n_score + i_score + ths_score + f_score
-                      + bias_score + vs_score + zp_score + decay_score)
+                      + bias_score + vs_score + zp_score + decay_score + score_52w)
         raw_signal = classify_signal(total)
 
         (timeout_signal, bars_elapsed, issued_date,
@@ -689,6 +715,7 @@ def main():
             "zone_pullback_label":  zp_label,
             "decay_score":          decay_score,   # [BM-18]
             "decay_flag":           decay_flag,    # [BM-18]
+            "score_52w":            score_52w,     # [BM-19]
             "tech_ver":             tech_ver,
         })
 
