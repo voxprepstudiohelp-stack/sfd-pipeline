@@ -1,6 +1,12 @@
 # -*- coding: utf-8 -*-
-# sfd_signal_aggregator.py | v3.9 | Claude (Anthropic) 2026-06-12
+# sfd_signal_aggregator.py | v4.0 | Claude (Anthropic) 2026-06-15
 # Deploy to: sfd-pipeline/tools/sfd_signal_aggregator.py
+#
+# [v3.9 -> v4.0 changes]
+# - [TREND] load_trend_filter_map(): sfd_trend_filter_latest.csv 로드 (없으면 {} graceful)
+# - [TREND] apply_trend_filter(): FAIL이면 RESERVE_BUY/WATCH_ONLY → TREND_FAIL 다운그레이드
+# - trend_filter_pass, trend_filter_reason 컬럼 출력
+# - DONE 로그에 TREND_FAIL 카운터 추가
 #
 # [v3.8 -> v3.9 changes]
 # - [BM-19] score_investor(): 외국인+기관+연기금 3주체 동시 순매수 보너스 +15pt
@@ -80,6 +86,7 @@ NO_TRADE_JSON       = os.path.join(LATEST_DIR, "sfd_no_trade_tickers.json")
 ZONE_PULLBACK_CSV   = os.path.join(LATEST_DIR, "sfd_zone_pullback_latest.csv")
 TIMEOUT_STATE_JSON  = os.path.join(LATEST_DIR, "signal_timeout_state.json")
 ALPHA_DECAY_CSV     = os.path.join(LATEST_DIR, "bm18_alpha_decay.csv")  # [BM-18]
+TREND_FILTER_CSV    = os.path.join(LATEST_DIR, "sfd_trend_filter_latest.csv")
 
 logging.basicConfig(
     handlers=[
@@ -330,6 +337,41 @@ def load_decay_score_map() -> dict:
         return {}
 
 
+# -- [TREND] Trend Filter --──────────────────────────────────────────────────
+def load_trend_filter_map() -> dict:
+    if not os.path.exists(TREND_FILTER_CSV):
+        logging.info(f"[TREND] trend_filter CSV not found: {TREND_FILTER_CSV} → 전체 PASS")
+        return {}
+    try:
+        df = pd.read_csv(TREND_FILTER_CSV, encoding="utf-8-sig", dtype={"ticker": str})
+        if "ticker" not in df.columns:
+            logging.warning(f"[TREND] ticker column missing in trend_filter CSV")
+            return {}
+        df["ticker"] = df["ticker"].str.strip().str.zfill(6)
+        result = {}
+        for _, row in df.iterrows():
+            result[str(row["ticker"])] = {
+                "trend_filter":        str(row.get("trend_filter",        "PASS")),
+                "trend_filter_reason": str(row.get("trend_filter_reason", "")),
+            }
+        fail_ct = sum(1 for v in result.values() if v["trend_filter"].upper() == "FAIL")
+        logging.info(f"[TREND] trend_filter_map: {len(result)}rows | FAIL={fail_ct}")
+        return result
+    except Exception as e:
+        logging.warning(f"[TREND] trend_filter_map load failed: {e}")
+        return {}
+
+
+def apply_trend_filter(ticker: str, signal: str, trend_filter_map: dict) -> tuple:
+    """FAIL이면 RESERVE_BUY/WATCH_ONLY → TREND_FAIL 다운그레이드. (NO_TRADE 제외)"""
+    row    = trend_filter_map.get(ticker, {})
+    status = str(row.get("trend_filter", "PASS")).upper()
+    reason = str(row.get("trend_filter_reason", ""))
+    if status == "FAIL" and signal in ("RESERVE_BUY", "WATCH_ONLY"):
+        return "TREND_FAIL", False, reason
+    return signal, True, reason
+
+
 def load_dart_event_map() -> dict:
     """[BM-19] DART 이벤트 점수 맵 로드 — ticker → impact_score"""
     result = {}
@@ -543,7 +585,7 @@ def load_fund_score_map() -> dict:
 
 # -- MAIN --────────────────────────────────────────────────────────────────────
 def main():
-    logging.info("=== sfd_signal_aggregator v3.8 START ===")
+    logging.info("=== sfd_signal_aggregator v4.0 START ===")
     logging.info(f"BASE_DIR:   {BASE_DIR}")
     logging.info(f"THRESHOLD:  RESERVE={THRESHOLD_RESERVE} WATCH={THRESHOLD_WATCH}")
     logging.info(f"[BM-13] Signal Timeout: {TIMEOUT_BARS}bars | targets: {TIMEOUT_SIGNALS}")
@@ -573,6 +615,7 @@ def main():
     zone_pullback_map = load_zone_pullback_map()
     timeout_state     = load_timeout_state()
     decay_map         = load_decay_score_map()  # [BM-18]
+    trend_filter_map  = load_trend_filter_map()             # [TREND]
     dart_map          = load_dart_event_map()   # [BM-19]
 
     use_tech_detail = len(tech_detail_map) > 0
@@ -701,6 +744,12 @@ def main():
             signal        = timeout_signal
             no_trade_flag  = False
 
+        # [TREND] trend_filter 적용 (NO_TRADE 제외)
+        if signal not in ("NO_TRADE",):
+            signal, tf_pass, tf_reason = apply_trend_filter(ticker, signal, trend_filter_map)
+        else:
+            tf_pass, tf_reason = True, ""
+
         name_row = input_df[input_df["ticker"] == ticker]
         name     = name_row.iloc[0].get("name", "") if not name_row.empty else ""
 
@@ -741,6 +790,8 @@ def main():
             "zone_pullback_label":  zp_label,
             "decay_score":          decay_score,   # [BM-18]
             "decay_flag":           decay_flag,    # [BM-18]
+            "trend_filter_pass":    tf_pass,       # [TREND]
+            "trend_filter_reason":  tf_reason,     # [TREND]
             "tech_ver":             tech_ver,
         })
 
@@ -755,29 +806,32 @@ def main():
         index=False, encoding="utf-8-sig"
     )
 
-    elapsed      = int(time.time() - START_TIME)
-    reserve      = len(df_out[df_out["signal"] == "RESERVE_BUY"])
-    watch        = len(df_out[df_out["signal"] == "WATCH_ONLY"])
-    no_trade_ct  = len(df_out[df_out["no_trade"] == True])
-    expired_ct   = len(df_out[df_out["signal_timeout"] == True])
-    zp_nonzero   = len(df_out[df_out["zone_pullback_score"] > 0])
-    vs_nonzero   = len(df_out[df_out["vol_surge_score"] > 0])
-    bias_up      = len(df_out[df_out["bias_filter_score"] > 0])
-    bias_down    = len(df_out[df_out["bias_filter_score"] < 0])
-    news_nonzero = len(df_out[df_out["news_score"] > 0])
-    fund_nonzero = len(df_out[df_out["fund_score"] > 0])
-    inv_nonzero  = len(df_out[df_out["investor_score"] > 0])
+    elapsed         = int(time.time() - START_TIME)
+    reserve         = len(df_out[df_out["signal"] == "RESERVE_BUY"])
+    watch           = len(df_out[df_out["signal"] == "WATCH_ONLY"])
+    no_trade_ct     = len(df_out[df_out["no_trade"] == True])
+    expired_ct      = len(df_out[df_out["signal_timeout"] == True])
+    trend_fail_ct   = len(df_out[df_out["signal"] == "TREND_FAIL"])
+    zp_nonzero      = len(df_out[df_out["zone_pullback_score"] > 0])
+    vs_nonzero      = len(df_out[df_out["vol_surge_score"] > 0])
+    bias_up         = len(df_out[df_out["bias_filter_score"] > 0])
+    bias_down       = len(df_out[df_out["bias_filter_score"] < 0])
+    news_nonzero    = len(df_out[df_out["news_score"] > 0])
+    fund_nonzero    = len(df_out[df_out["fund_score"] > 0])
+    inv_nonzero     = len(df_out[df_out["investor_score"] > 0])
 
     logging.info(
         f"DONE | RESERVE={reserve} WATCH={watch} NO_TRADE={no_trade_ct} "
-        f"[BM-13]EXPIRED={expired_ct} [BM-12]zp={zp_nonzero} "
+        f"[BM-13]EXPIRED={expired_ct} [TREND]FAIL={trend_fail_ct} "
+        f"[BM-12]zp={zp_nonzero} "
         f"[BM-10]vs={vs_nonzero} [BM-3]+{bias_up}/-{bias_down} "
         f"news={news_nonzero} fund={fund_nonzero} investor={inv_nonzero} "
         f"elapsed={elapsed}s MODE={MODE}"
     )
     print(
         f"[OK] RESERVE={reserve} | WATCH={watch} | NO_TRADE={no_trade_ct} | "
-        f"[BM-13]EXPIRED={expired_ct} | [BM-12]zp={zp_nonzero} | "
+        f"[BM-13]EXPIRED={expired_ct} | [TREND]FAIL={trend_fail_ct} | "
+        f"[BM-12]zp={zp_nonzero} | "
         f"[BM-10]vs={vs_nonzero} | [BM-3]+{bias_up}/-{bias_down} | "
         f"news={news_nonzero} | fund={fund_nonzero} | investor={inv_nonzero} | "
         f"elapsed={elapsed}s | MODE={MODE}"

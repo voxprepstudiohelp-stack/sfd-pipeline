@@ -1,6 +1,6 @@
 # ============================================================
 # 파일명: sfd_profit_manager.py
-# 버전: v1.0
+# 버전: v1.1
 # 작성: Claude (Anthropic) — 2026.06.15
 # 위치: tools/sfd_profit_manager.py
 #
@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import os
+import json
 import logging
 from pathlib import Path
 from datetime import datetime
@@ -47,9 +48,10 @@ else:
         load_dotenv(_ENV, override=True)
 
 # ── 입력/출력 ──────────────────────────────────────────────
-EXECUTION_CSV = OUTPUT_DIR / "sfd_account_execution_latest.csv"
-OUT_CSV       = OUTPUT_DIR / "sfd_profit_manager_latest.csv"
-LOG_PATH      = ROOT / "logs" / "sfd_profit_manager.log"
+EXECUTION_CSV       = OUTPUT_DIR / "sfd_account_execution_latest.csv"
+OUT_CSV             = OUTPUT_DIR / "sfd_profit_manager_latest.csv"
+NOTIFIED_STATE_JSON = OUTPUT_DIR / "profit_manager_notified.json"
+LOG_PATH            = ROOT / "logs" / "sfd_profit_manager.log"
 
 # ── 익절 구간 파라미터 ────────────────────────────────────
 PROFIT_STAGES = [
@@ -68,6 +70,68 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s",
     encoding="utf-8",
 )
+
+
+# ── Notifier 연동 ─────────────────────────────────────────
+def _try_import_notifier():
+    try:
+        import sfd_notifier
+        return sfd_notifier
+    except ImportError:
+        logging.info("[notifier] sfd_notifier not available — 알림 생략")
+        return None
+
+
+def load_notified_state() -> dict:
+    if not NOTIFIED_STATE_JSON.exists():
+        return {}
+    try:
+        with open(NOTIFIED_STATE_JSON, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_notified_state(state: dict) -> None:
+    try:
+        with open(NOTIFIED_STATE_JSON, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logging.warning(f"[notifier] notified_state 저장 실패: {e}")
+
+
+def send_profit_alert(notifier, code: str, name: str, action: str,
+                      pnl_rate: str, current_price: int) -> bool:
+    subject = f"[SFD 익절 알림] {code} {name} — {action}"
+    body    = (f"종목: {code} {name}\n수익률: {pnl_rate}\n"
+               f"현재가: {current_price:,}원\n권고: {action}")
+    try:
+        if hasattr(notifier, "send_alert"):
+            notifier.send_alert(subject=subject, body=body)
+            return True
+        if hasattr(notifier, "send_email"):
+            notifier.send_email(subject=subject, body=body)
+            return True
+    except Exception as e:
+        logging.warning(f"[notifier] send_profit_alert 실패: {e}")
+    return False
+
+
+def send_trailing_stop_alert(notifier, code: str, name: str,
+                              drop_pct: str, current_price: int) -> bool:
+    subject = f"[SFD 긴급경보] {code} {name} — 트레일링 스탑 발동"
+    body    = (f"종목: {code} {name}\n고점 대비 하락: {drop_pct}\n"
+               f"현재가: {current_price:,}원\n→ 긴급 매도 검토 요망")
+    try:
+        if hasattr(notifier, "send_alert"):
+            notifier.send_alert(subject=subject, body=body, priority="CRITICAL")
+            return True
+        if hasattr(notifier, "send_email"):
+            notifier.send_email(subject=subject, body=body)
+            return True
+    except Exception as e:
+        logging.warning(f"[notifier] send_trailing_stop_alert 실패: {e}")
+    return False
 
 
 def _f(val, default=0.0) -> float:
@@ -180,8 +244,11 @@ def evaluate_profit(exec_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def main() -> None:
-    print(f"[INFO] sfd_profit_manager v1.0 | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"[INFO] sfd_profit_manager v1.1 | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"[INFO] 분할 익절 + 트레일링 스탑 평가 시작")
+
+    notifier       = _try_import_notifier()
+    notified_state = load_notified_state()
 
     exec_df = load_execution()
     if exec_df.empty:
@@ -204,6 +271,8 @@ def main() -> None:
         print(f"\n[DONE] 익절/경보 신호: {len(result_df)}종목")
         print("-" * 60)
 
+        today = datetime.now().strftime("%Y-%m-%d")
+
         for _, r in result_df.iterrows():
             icon = "🚨" if r["urgency"] == "CRITICAL" else ("⚠️" if r["urgency"] == "HIGH" else "💰")
             print(f"  {icon} [{r['urgency']}] {r['stock_code']} {r['corp_name']}")
@@ -212,10 +281,35 @@ def main() -> None:
                 print(f"     권고: {r['suggest_qty']}주 매도")
             print()
 
+            # 중복 방지: (종목+action+날짜) 키로 오늘 이미 발송한 건 skip
+            notif_key = f"{today}|{r['stock_code']}|{r['signal_type']}|{r['action']}"
+            if notifier and not notified_state.get(notif_key):
+                if r["signal_type"] == "TRAILING_STOP":
+                    ok = send_trailing_stop_alert(
+                        notifier,
+                        code=str(r["stock_code"]),
+                        name=str(r["corp_name"]),
+                        drop_pct=str(r.get("drop_from_high", "")),
+                        current_price=int(r["current_price"]),
+                    )
+                else:
+                    ok = send_profit_alert(
+                        notifier,
+                        code=str(r["stock_code"]),
+                        name=str(r["corp_name"]),
+                        action=str(r["action"]),
+                        pnl_rate=str(r["pnl_rate"]),
+                        current_price=int(r["current_price"]),
+                    )
+                if ok:
+                    notified_state[notif_key] = True
+                    logging.info(f"[notifier] 알림 발송: {notif_key}")
+
         if not critical.empty:
             logging.warning(f"TRAILING_STOP {len(critical)}건: {list(critical['stock_code'])}")
-        logging.info(f"v1.0 완료: CRITICAL={len(critical)}, HIGH={len(high)}, NORMAL={len(normal)}")
+        logging.info(f"v1.1 완료: CRITICAL={len(critical)}, HIGH={len(high)}, NORMAL={len(normal)}")
 
+    save_notified_state(notified_state)
     print(f"[OUT] {OUT_CSV}")
 
 
