@@ -106,12 +106,8 @@ def send_profit_alert(notifier, code: str, name: str, action: str,
     body    = (f"종목: {code} {name}\n수익률: {pnl_rate}\n"
                f"현재가: {current_price:,}원\n권고: {action}")
     try:
-        if hasattr(notifier, "send_alert"):
-            notifier.send_alert(subject=subject, body=body)
-            return True
-        if hasattr(notifier, "send_email"):
-            notifier.send_email(subject=subject, body=body)
-            return True
+        notifier.send_email(subject=subject, html_body=f"<pre>{body}</pre>", text_body=body)
+        return True
     except Exception as e:
         logging.warning(f"[notifier] send_profit_alert 실패: {e}")
     return False
@@ -119,16 +115,12 @@ def send_profit_alert(notifier, code: str, name: str, action: str,
 
 def send_trailing_stop_alert(notifier, code: str, name: str,
                               drop_pct: str, current_price: int) -> bool:
-    subject = f"[SFD 긴급경보] {code} {name} — 트레일링 스탑 발동"
+    subject = f"⚠️ CRITICAL [SFD 긴급경보] {code} {name} — 트레일링 스탑 발동"
     body    = (f"종목: {code} {name}\n고점 대비 하락: {drop_pct}\n"
                f"현재가: {current_price:,}원\n→ 긴급 매도 검토 요망")
     try:
-        if hasattr(notifier, "send_alert"):
-            notifier.send_alert(subject=subject, body=body, priority="CRITICAL")
-            return True
-        if hasattr(notifier, "send_email"):
-            notifier.send_email(subject=subject, body=body)
-            return True
+        notifier.send_email(subject=subject, html_body=f"<pre>{body}</pre>", text_body=body)
+        return True
     except Exception as e:
         logging.warning(f"[notifier] send_trailing_stop_alert 실패: {e}")
     return False
