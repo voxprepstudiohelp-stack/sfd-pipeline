@@ -1,20 +1,18 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 sfd_daily_report.py v1.0
-SFD 일일 HTML 레포트 생성기 (7섹션 완전판)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-S0: 글로벌 온도계 (지수/환율/원자재/VIX)
-S1: 오늘의 한국 영향 요인 (뉴스 트리거→섹터)
-S2: 캘린더 경보 (D-30/7/1 자동 팝업)
-S3: 급등예상 TOP10
-S4: 종목 상세 카드
-S5: 미래산업 모멘텀 게이지
-S6: 벤치마킹 + 자가진단
-출력: sfd_report_YYYYMMDD.html
-실행: python -X utf8 tools/sfd_daily_report.py
-스케줄: 08:10 장전 / 16:10 장마감
-"""
+SFD ?쇱씪 HTML ?덊룷???앹꽦湲?(7?뱀뀡 ?꾩쟾??
+?곣봺?곣봺?곣봺?곣봺?곣봺?곣봺?곣봺?곣봺?곣봺?곣봺?곣봺?곣봺?곣봺?곣봺?곣봺?곣봺?곣봺?곣봺?곣봺?곣봺??S0: 湲濡쒕쾶 ?⑤룄怨?(吏???섏쑉/?먯옄??VIX)
+S1: ?ㅻ뒛???쒓뎅 ?곹뼢 ?붿씤 (?댁뒪 ?몃━嫄겸넂?뱁꽣)
+S2: 罹섎┛??寃쎈낫 (D-30/7/1 ?먮룞 ?앹뾽)
+S3: 湲됰벑?덉긽 TOP10
+S4: 醫낅ぉ ?곸꽭 移대뱶
+S5: 誘몃옒?곗뾽 紐⑤찘? 寃뚯씠吏
+S6: 踰ㅼ튂留덊궧 + ?먭?吏꾨떒
+異쒕젰: sfd_report_YYYYMMDD.html
+?ㅽ뻾: python -X utf8 tools/sfd_daily_report.py
+?ㅼ?以? 08:10 ?μ쟾 / 16:10 ?λ쭏媛?"""
 
 import os, sys, json, csv, logging
 from datetime import datetime
@@ -23,7 +21,7 @@ from pathlib import Path
 import json as _json
 
 def _load_market_rank() -> dict:
-    _p = Path(__file__).parent / "outputs" / "latest" / "sfd_market_rank.json"
+    _p = Path(__file__).parent.parent / "outputs" / "latest" / "sfd_market_rank.json"
     if _p.exists():
         try:
             return _json.loads(_p.read_text(encoding="utf-8"))
@@ -35,10 +33,10 @@ def _build_s7_section(rank_data: dict = None) -> str:
     if rank_data is None:
         rank_data = _load_market_rank()
     updated = rank_data.get("generated_at", "")
-    def _tbl(rows, show_vol=False, show_net=False, empty_msg="데이터 없음"):
+    def _tbl(rows, show_vol=False, show_net=False, empty_msg="?곗씠???놁쓬"):
         if not rows:
             return f'<p style="color:#888;font-size:12px;padding:8px">{empty_msg}</p>'
-        extra_th = "<th>거래량</th><th>증감%</th>" if show_vol else ("<th>순매수</th>" if show_net else "<th>거래량</th>")
+        extra_th = "<th>嫄곕옒??/th><th>利앷컧%</th>" if show_vol else ("<th>?쒕ℓ??/th>" if show_net else "<th>嫄곕옒??/th>")
         body = ""
         for r in rows:
             rate = r.get("change_rate", 0)
@@ -54,18 +52,18 @@ def _build_s7_section(rank_data: dict = None) -> str:
             else:
                 extra_td = f'<td>{int(r.get("volume",0)):,}</td>'
             body += f'<tr><td style="color:#888">{r["rank"]}</td><td>{link}</td><td>{int(r.get("price",0)):,}</td><td style="color:{color};font-weight:600">{sign}{rate:.2f}%</td>{extra_td}</tr>'
-        return f'<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="border-bottom:1px solid #333;color:#aaa"><th>#</th><th style="text-align:left">종목</th><th>현재가</th><th>등락률</th>{extra_th}</tr></thead><tbody>{body}</tbody></table>'
+        return f'<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="border-bottom:1px solid #333;color:#aaa"><th>#</th><th style="text-align:left">醫낅ぉ</th><th>?꾩옱媛</th><th>?깅씫瑜?/th>{extra_th}</tr></thead><tbody>{body}</tbody></table>'
     tabs = [
-        ("rise","🔴 상승",_tbl(rank_data.get("rise_top15",[]))),
-        ("fall","🔵 하락",_tbl(rank_data.get("fall_top15",[]))),
-        ("vol","📈 거래량",_tbl(rank_data.get("volume_top15",[]),show_vol=True)),
-        ("foreign","🌍 외국인",_tbl(rank_data.get("foreign_top15",[]),show_net=True,empty_msg="파이프라인 실행 후 표시")),
-        ("inst","🏦 기관",_tbl(rank_data.get("institution_top15",[]),show_net=True,empty_msg="파이프라인 실행 후 표시")),
+        ("rise","?뵶 ?곸듅",_tbl(rank_data.get("rise_top15",[]))),
+        ("fall","?뵷 ?섎씫",_tbl(rank_data.get("fall_top15",[]))),
+        ("vol","?뱢 嫄곕옒??,_tbl(rank_data.get("volume_top15",[]),show_vol=True)),
+        ("foreign","?뙇 ?멸뎅??,_tbl(rank_data.get("foreign_top15",[]),show_net=True,empty_msg="?뚯씠?꾨씪???ㅽ뻾 ???쒖떆")),
+        ("inst","?룱 湲곌?",_tbl(rank_data.get("institution_top15",[]),show_net=True,empty_msg="?뚯씠?꾨씪???ㅽ뻾 ???쒖떆")),
     ]
     btn_html = "".join(f'<button onclick="showRankTab(\'{k}\')" class="rtab{" active" if i==0 else ""}" id="rtab-{k}">{lbl}</button>' for i,(k,lbl,_) in enumerate(tabs))
     panel_html = "".join(f'<div id="rank-{k}" class="rank-panel{" active" if i==0 else ""}">{tbl}</div>' for i,(k,_,tbl) in enumerate(tabs))
     return f"""<section id="s7" class="section">
-  <h2 class="sec-title">📊 시장 순위 <span style="font-size:11px;color:#888;font-weight:normal">TOP 15</span><span style="font-size:10px;color:#666;float:right">{updated}</span></h2>
+  <h2 class="sec-title">?뱤 ?쒖옣 ?쒖쐞 <span style="font-size:11px;color:#888;font-weight:normal">TOP 15</span><span style="font-size:10px;color:#666;float:right">{updated}</span></h2>
   <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap">{btn_html}</div>
   <style>.rtab{{padding:4px 10px;border-radius:12px;border:1px solid #444;background:#1e1e1e;color:#ccc;cursor:pointer;font-size:12px}}.rtab.active{{background:#2a4a7f;border-color:#4a7abf;color:#fff}}.rank-panel{{display:none}}.rank-panel.active{{display:block}}</style>
   {panel_html}
@@ -81,7 +79,7 @@ os.makedirs(REPORT_DIR, exist_ok=True)
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(asctime)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# ── 데이터 로드 헬퍼 ─────────────────────────────────────────────
+# ?? ?곗씠??濡쒕뱶 ?ы띁 ?????????????????????????????????????????????
 
 def load_json(filename):
     path = os.path.join(OUTPUT_DIR, filename)
@@ -104,7 +102,7 @@ def load_calendar():
             return json.load(f)
     return {}
 
-# ── 데이터 준비 ───────────────────────────────────────────────────
+# ?? ?곗씠??以鍮????????????????????????????????????????????????????
 
 def prepare_data():
     radar  = load_json("sfd_global_radar_latest.json")
@@ -116,15 +114,15 @@ def prepare_data():
     timeout = load_json("signal_timeout_state.json")
     calendar = load_calendar()
 
-    # TOP20: master_signal에서 WATCH_ONLY/RESERVE_BUY 상위
+    # TOP20: master_signal?먯꽌 WATCH_ONLY/RESERVE_BUY ?곸쐞
     candidates = [r for r in master if r.get("signal") in ("WATCH_ONLY", "RESERVE_BUY")]
     try:
         candidates.sort(key=lambda x: float(x.get("total_score", 0)), reverse=True)
     except Exception:
         pass
-    top10 = candidates[:20]  # TOP20으로 확장
+    top10 = candidates[:20]  # TOP20?쇰줈 ?뺤옣
 
-    # prev_close 보강: sfd_prev_close_latest.csv LEFT JOIN by ticker
+    # prev_close 蹂닿컯: sfd_prev_close_latest.csv LEFT JOIN by ticker
     _pc_path = os.path.join(OUTPUT_DIR, "sfd_prev_close_latest.csv")
     _pc_map: dict = {}
     if os.path.exists(_pc_path):
@@ -144,10 +142,10 @@ def prepare_data():
             if not r.get("close") and _src.get("close"):
                 r["close"] = _src["close"]
 
-    # SIGNAL_EXPIRED 경고
+    # SIGNAL_EXPIRED 寃쎄퀬
     expired = [r for r in master if r.get("signal") == "SIGNAL_EXPIRED"]
 
-    # recent_trades: RESERVE_BUY 실적 (return_d1 내림차순 TOP10)
+    # recent_trades: RESERVE_BUY ?ㅼ쟻 (return_d1 ?대┝李⑥닚 TOP10)
     recent_trades = []
     _bt_csv = os.path.join(OUTPUT_DIR, "sfd_backtest_report.csv")
     if os.path.exists(_bt_csv):
@@ -174,22 +172,22 @@ def prepare_data():
         "recent_trades": recent_trades,
     }
 
-# ── 색상/아이콘 헬퍼 ─────────────────────────────────────────────
+# ?? ?됱긽/?꾩씠肄??ы띁 ?????????????????????????????????????????????
 
 def chg_color(v):
     if v is None: return "#888"
     return "#e24b4a" if float(v) >= 0 else "#378add"
 
 def chg_arrow(v):
-    if v is None: return "−"
-    return f"▲ {abs(float(v)):.2f}%" if float(v) >= 0 else f"▼ {abs(float(v)):.2f}%"
+    if v is None: return "??
+    return f"??{abs(float(v)):.2f}%" if float(v) >= 0 else f"??{abs(float(v)):.2f}%"
 
 def signal_badge(sig):
     colors = {
-        "RESERVE_BUY":    ("#e24b4a", "⭐ 매수후보"),
-        "WATCH_ONLY":     ("#EF9F27", "👁 관심"),
-        "HOLD":           ("#888",    "⏸ 보유"),
-        "SIGNAL_EXPIRED": ("#A32D2D", "⚠ 신호만료"),
+        "RESERVE_BUY":    ("#e24b4a", "狩?留ㅼ닔?꾨낫"),
+        "WATCH_ONLY":     ("#EF9F27", "?몓 愿??),
+        "HOLD":           ("#888",    "??蹂댁쑀"),
+        "SIGNAL_EXPIRED": ("#A32D2D", "???좏샇留뚮즺"),
     }
     c, t = colors.get(sig, ("#888", sig))
     return f'<span style="background:{c};color:#fff;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:500">{t}</span>'
@@ -201,7 +199,7 @@ def urgency_style(u):
         "LOW":  "background:#E6F1FB;border-left:4px solid #378ADD;",
     }.get(u, "")
 
-# ── S0: 글로벌 온도계 ─────────────────────────────────────────────
+# ?? S0: 湲濡쒕쾶 ?⑤룄怨??????????????????????????????????????????????
 
 def render_s0(radar):
     market = radar.get("market", {})
@@ -210,31 +208,31 @@ def render_s0(radar):
     commodities= market.get("commodities", {})
     vix_note   = radar.get("vix_note", "")
 
-    # 지수별 한국 영향 설명
+    # 吏?섎퀎 ?쒓뎅 ?곹뼢 ?ㅻ챸
     INDEX_CONTEXT = {
-        "KOSPI":    ("코스피", "한국 대형주 종합지수", "직접 지표"),
-        "KOSDAQ":   ("코스닥", "한국 중소형/기술주 지수", "직접 지표"),
-        "SP500":    ("S&P500", "미국 500대 기업 지수 — 전일 등락이 다음날 코스피 방향에 60~70% 연동", "글로벌 선행"),
-        "NASDAQ":   ("나스닥", "미국 기술주 지수 — 반도체/AI주 직접 연동. NASDAQ↑ → 삼성전자/SK하이닉스 강세", "반도체 선행"),
-        "DOW":      ("다우존스", "미국 우량주 30개 — 경기 방향성 지표", "경기 선행"),
-        "NIKKEI":   ("닛케이", "일본 지수 — 엔화/원화 동조화. 닛케이↓ = 아시아 리스크 확대", "아시아 동조"),
-        "SHANGHAI": ("상하이", "중국 지수 — 화장품/면세/소재주 연동. 상하이↑ → 중국 소비 관련주 강세", "중국 소비 선행"),
-        "HANGSENG": ("항셍", "홍콩 지수 — 중국 자본 흐름 바로미터", "중국 자본"),
+        "KOSPI":    ("肄붿뒪??, "?쒓뎅 ??뺤＜ 醫낇빀吏??, "吏곸젒 吏??),
+        "KOSDAQ":   ("肄붿뒪??, "?쒓뎅 以묒냼??湲곗닠二?吏??, "吏곸젒 吏??),
+        "SP500":    ("S&P500", "誘멸뎅 500? 湲곗뾽 吏?????꾩씪 ?깅씫???ㅼ쓬??肄붿뒪??諛⑺뼢??60~70% ?곕룞", "湲濡쒕쾶 ?좏뻾"),
+        "NASDAQ":   ("?섏뒪??, "誘멸뎅 湲곗닠二?吏????諛섎룄泥?AI二?吏곸젒 ?곕룞. NASDAQ?????쇱꽦?꾩옄/SK?섏씠?됱뒪 媛뺤꽭", "諛섎룄泥??좏뻾"),
+        "DOW":      ("?ㅼ슦議댁뒪", "誘멸뎅 ?곕웾二?30媛???寃쎄린 諛⑺뼢??吏??, "寃쎄린 ?좏뻾"),
+        "NIKKEI":   ("?쏆???, "?쇰낯 吏?????뷀솕/?먰솕 ?숈“?? ?쏆??닳넃 = ?꾩떆??由ъ뒪???뺣?", "?꾩떆???숈“"),
+        "SHANGHAI": ("?곹븯??, "以묎뎅 吏?????붿옣??硫댁꽭/?뚯옱二??곕룞. ?곹븯?닳넁 ??以묎뎅 ?뚮퉬 愿?⑥＜ 媛뺤꽭", "以묎뎅 ?뚮퉬 ?좏뻾"),
+        "HANGSENG": ("??뀓", "?띿쉘 吏????以묎뎅 ?먮낯 ?먮쫫 諛붾줈誘명꽣", "以묎뎅 ?먮낯"),
     }
     FX_CONTEXT = {
-        "USD_KRW": ("달러/원", "원화 약세(↑) → 수출주 유리, 수입 원자재주 불리. 1,400원 돌파 시 외국인 이탈 경고"),
-        "USD_JPY": ("달러/엔", "엔화 약세(↑) → 일본 수출주 경쟁력↑, 한국 자동차/전자와 경쟁"),
-        "USD_CNY": ("달러/위안", "위안화 약세(↑) → 중국 수출 유리, 한국 대중국 수출 불리"),
-        "EUR_USD": ("유로/달러", "유로 강세(↑) → 글로벌 달러 약세 신호, 신흥국 외국인 자금 유입"),
+        "USD_KRW": ("?щ윭/??, "?먰솕 ?쎌꽭(?? ???섏텧二??좊━, ?섏엯 ?먯옄?ъ＜ 遺덈━. 1,400???뚰뙆 ???멸뎅???댄깉 寃쎄퀬"),
+        "USD_JPY": ("?щ윭/??, "?뷀솕 ?쎌꽭(?? ???쇰낯 ?섏텧二?寃쎌웳?β넁, ?쒓뎅 ?먮룞李??꾩옄? 寃쎌웳"),
+        "USD_CNY": ("?щ윭/?꾩븞", "?꾩븞???쎌꽭(?? ??以묎뎅 ?섏텧 ?좊━, ?쒓뎅 ?以묎뎅 ?섏텧 遺덈━"),
+        "EUR_USD": ("?좊줈/?щ윭", "?좊줈 媛뺤꽭(?? ??湲濡쒕쾶 ?щ윭 ?쎌꽭 ?좏샇, ?좏씎援??멸뎅???먭툑 ?좎엯"),
     }
     COM_CONTEXT = {
-        "GOLD":    ("금", "안전자산 선호 지표. 금↑ = 리스크 오프 → 방어주/금 관련주 강세"),
-        "OIL_WTI": ("WTI유가", "유가↑ → 정유/조선(LNG선) 강세, 항공/운송 약세. 중동 긴장 시 급등"),
-        "COPPER":  ("구리", "'닥터 코퍼' — 경기 선행 지표. 구리↑ = 글로벌 경기 회복 신호 → 소재/건설 강세"),
-        "NATGAS":  ("천연가스", "천연가스↑ → LNG 운반선/가스 관련주 강세. 겨울 시즌 계절성"),
-        "BTC":     ("비트코인", "Risk-on 지표. BTC↑ = 위험자산 선호 → 성장주/기술주 동반 강세 경향"),
-        "VIX":     ("VIX 공포지수", "20 미만: 안정 | 20~30: 경계 | 30+: 공포(저점 매수 기회). 오늘: " + str(vix_note)),
-        "US10Y":   ("미국10년국채", "금리↑ = 성장주 불리, 배당주/리츠 불리. 4.5% 돌파 시 외국인 이탈 경고"),
+        "GOLD":    ("湲?, "?덉쟾?먯궛 ?좏샇 吏?? 湲댿넁 = 由ъ뒪???ㅽ봽 ??諛⑹뼱二?湲?愿?⑥＜ 媛뺤꽭"),
+        "OIL_WTI": ("WTI?좉?", "?좉??????뺤쑀/議곗꽑(LNG?? 媛뺤꽭, ??났/?댁넚 ?쎌꽭. 以묐룞 湲댁옣 ??湲됰벑"),
+        "COPPER":  ("援щ━", "'?ν꽣 肄뷀띁' ??寃쎄린 ?좏뻾 吏?? 援щ━??= 湲濡쒕쾶 寃쎄린 ?뚮났 ?좏샇 ???뚯옱/嫄댁꽕 媛뺤꽭"),
+        "NATGAS":  ("泥쒖뿰媛??, "泥쒖뿰媛?ㅲ넁 ??LNG ?대컲??媛??愿?⑥＜ 媛뺤꽭. 寃⑥슱 ?쒖쫵 怨꾩젅??),
+        "BTC":     ("鍮꾪듃肄붿씤", "Risk-on 吏?? BTC??= ?꾪뿕?먯궛 ?좏샇 ???깆옣二?湲곗닠二??숇컲 媛뺤꽭 寃쏀뼢"),
+        "VIX":     ("VIX 怨듯룷吏??, "20 誘몃쭔: ?덉젙 | 20~30: 寃쎄퀎 | 30+: 怨듯룷(???留ㅼ닔 湲고쉶). ?ㅻ뒛: " + str(vix_note)),
+        "US10Y":   ("誘멸뎅10?꾧뎅梨?, "湲덈━??= ?깆옣二?遺덈━, 諛곕떦二?由ъ툩 遺덈━. 4.5% ?뚰뙆 ???멸뎅???댄깉 寃쎄퀬"),
     }
 
     def row(d, key=""):
@@ -242,17 +240,16 @@ def render_s0(radar):
             return ""
         color = chg_color(d.get("chg_pct"))
         arrow = chg_arrow(d.get("chg_pct"))
-        # 팝업 데이터
-        ctx = INDEX_CONTEXT.get(key) or FX_CONTEXT.get(key) or COM_CONTEXT.get(key)
+        # ?앹뾽 ?곗씠??        ctx = INDEX_CONTEXT.get(key) or FX_CONTEXT.get(key) or COM_CONTEXT.get(key)
         popup_title = ctx[0] if ctx else d.get('label','')
         popup_desc  = ctx[1] if ctx else ""
         popup_tag   = ctx[2] if ctx and len(ctx) > 2 else ""
         chg = d.get('chg_pct', 0) or 0
-        impact = "상승 — 관련 섹터 긍정적" if float(chg) > 0 else "하락 — 관련 섹터 주의" if float(chg) < 0 else "보합"
+        impact = "?곸듅 ??愿???뱁꽣 湲띿젙?? if float(chg) > 0 else "?섎씫 ??愿???뱁꽣 二쇱쓽" if float(chg) < 0 else "蹂댄빀"
         price_str = str(d.get('price', '-'))
         onclick = f"showInfoPopup('{popup_title}', '{popup_desc}', '{popup_tag}', '{price_str}', '{arrow}', '{impact}')"
         return f"""
-        <div class="mcard" onclick="{onclick}" style="cursor:pointer" title="클릭하면 상세 설명">
+        <div class="mcard" onclick="{onclick}" style="cursor:pointer" title="?대┃?섎㈃ ?곸꽭 ?ㅻ챸">
           <div class="mlabel">{d.get('label','')}</div>
           <div class="mprice">{d.get('price', '-'):,.2f}</div>
           <div class="mchg" style="color:{color}">{arrow}</div>
@@ -262,14 +259,14 @@ def render_s0(radar):
     fx_html  = "".join(row(v, k) for k, v in fx_rates.items())
     com_html = "".join(row(v, k) for k, v in commodities.items())
 
-    # RSS 헤드라인 상위 10건 (모바일도 충분히)
+    # RSS ?ㅻ뱶?쇱씤 ?곸쐞 10嫄?(紐⑤컮?쇰룄 異⑸텇??
     def _news_summary(title):
         t = title.lower()
-        if any(k in t for k in ("cuts", "downgrade", "upgrade")): return "등급변경"
+        if any(k in t for k in ("cuts", "downgrade", "upgrade")): return "?깃툒蹂寃?
         if "ipo" in t: return "IPO"
-        if any(k in t for k in ("earnings", "profit")): return "실적"
-        if any(k in t for k in ("rate", "fed", "fomc")): return "금리"
-        if any(k in t for k in ("crash", "disaster", "accident")): return "사고"
+        if any(k in t for k in ("earnings", "profit")): return "?ㅼ쟻"
+        if any(k in t for k in ("rate", "fed", "fomc")): return "湲덈━"
+        if any(k in t for k in ("crash", "disaster", "accident")): return "?ш퀬"
         return title[:20]
 
     headlines = radar.get("rss_headlines", [])[:10]
@@ -284,26 +281,26 @@ def render_s0(radar):
 
     return f"""
 <section id="s0" class="section">
-  <h2 class="sec-title">📡 S0 — 글로벌 온도계 <span style="font-size:11px;color:#888;font-weight:400">카드 클릭 → 한국 영향 설명</span></h2>
-  <div class="subsec-label">주요 지수</div>
+  <h2 class="sec-title">?뱻 S0 ??湲濡쒕쾶 ?⑤룄怨?<span style="font-size:11px;color:#888;font-weight:400">移대뱶 ?대┃ ???쒓뎅 ?곹뼢 ?ㅻ챸</span></h2>
+  <div class="subsec-label">二쇱슂 吏??/div>
   <div class="market-grid">{idx_html}</div>
-  <div class="subsec-label" style="margin-top:12px">환율</div>
+  <div class="subsec-label" style="margin-top:12px">?섏쑉</div>
   <div class="market-grid">{fx_html}</div>
-  <div class="subsec-label" style="margin-top:12px">원자재 & 자산</div>
+  <div class="subsec-label" style="margin-top:12px">?먯옄??& ?먯궛</div>
   <div class="market-grid">{com_html}</div>
   <div class="vix-bar" style="color:{vix_color}">
-    VIX {vix_val or '—'} → {vix_note}
+    VIX {vix_val or '??} ??{vix_note}
   </div>
-  <div class="subsec-label" style="margin-top:16px">글로벌 뉴스 헤드라인 (클릭 → 원문)</div>
-  <div class="hl-box">{hl_html if hl_html else '<div class="empty">뉴스 없음</div>'}</div>
+  <div class="subsec-label" style="margin-top:16px">湲濡쒕쾶 ?댁뒪 ?ㅻ뱶?쇱씤 (?대┃ ???먮Ц)</div>
+  <div class="hl-box">{hl_html if hl_html else '<div class="empty">?댁뒪 ?놁쓬</div>'}</div>
 </section>"""
 
-# ── S1: 오늘의 한국 영향 요인 ────────────────────────────────────
+# ?? S1: ?ㅻ뒛???쒓뎅 ?곹뼢 ?붿씤 ????????????????????????????????????
 
 def render_s1(radar):
     triggers = radar.get("sector_triggers", [])
     if not triggers:
-        return '<section id="s1" class="section"><h2 class="sec-title">🇰🇷 S1 — 오늘의 한국 영향 요인</h2><div class="empty">뉴스 트리거 없음</div></section>'
+        return '<section id="s1" class="section"><h2 class="sec-title">?눖?눟 S1 ???ㅻ뒛???쒓뎅 ?곹뼢 ?붿씤</h2><div class="empty">?댁뒪 ?몃━嫄??놁쓬</div></section>'
 
     pos = [t for t in triggers if t.get("boost", 0) > 0]
     neg = [t for t in triggers if t.get("boost", 0) < 0]
@@ -312,8 +309,8 @@ def render_s1(radar):
         color = "#e24b4a" if t.get("boost", 0) > 0 else "#378add"
         sign  = "+" if t.get("boost", 0) > 0 else ""
         tickers_str = ", ".join(t.get("tickers", [])[:4])
-        direction = "상승" if t.get("boost",0) > 0 else "하락"
-        onclick = f"showInfoPopup('{t.get('sector','')}', '{t.get('headline','').replace(chr(39),'')}', '{t.get('source','')} · 키워드: {t.get('keyword','')}', '{sign}{t.get('boost',0)}pt boost', '관련 종목코드: {tickers_str}', '{direction} 트리거')"
+        direction = "?곸듅" if t.get("boost",0) > 0 else "?섎씫"
+        onclick = f"showInfoPopup('{t.get('sector','')}', '{t.get('headline','').replace(chr(39),'')}', '{t.get('source','')} 쨌 ?ㅼ썙?? {t.get('keyword','')}', '{sign}{t.get('boost',0)}pt boost', '愿??醫낅ぉ肄붾뱶: {tickers_str}', '{direction} ?몃━嫄?)"
         return f"""
         <div class="trig-card" onclick="{onclick}" style="cursor:pointer">
           <div style="display:flex;justify-content:space-between;align-items:center">
@@ -321,7 +318,7 @@ def render_s1(radar):
             <span style="color:{color};font-weight:500;font-size:12px">{sign}{t.get('boost',0)}pt</span>
           </div>
           <div class="trig-headline">"{t.get('headline','')}"</div>
-          <div class="trig-src">{t.get('source','')} · 키워드: {t.get('keyword','')}</div>
+          <div class="trig-src">{t.get('source','')} 쨌 ?ㅼ썙?? {t.get('keyword','')}</div>
         </div>"""
 
     pos_html = "".join(trig_card(t) for t in pos[:5])
@@ -329,27 +326,27 @@ def render_s1(radar):
 
     return f"""
 <section id="s1" class="section">
-  <h2 class="sec-title">🇰🇷 S1 — 오늘의 한국 영향 요인</h2>
+  <h2 class="sec-title">?눖?눟 S1 ???ㅻ뒛???쒓뎅 ?곹뼢 ?붿씤</h2>
   <div class="two-col">
     <div>
-      <div class="subsec-label" style="color:#e24b4a">▲ 상승 트리거 ({len(pos)})</div>
-      {pos_html if pos_html else '<div class="empty">없음</div>'}
+      <div class="subsec-label" style="color:#e24b4a">???곸듅 ?몃━嫄?({len(pos)})</div>
+      {pos_html if pos_html else '<div class="empty">?놁쓬</div>'}
     </div>
     <div>
-      <div class="subsec-label" style="color:#378add">▼ 하락 요인 ({len(neg)})</div>
-      {neg_html if neg_html else '<div class="empty">없음</div>'}
+      <div class="subsec-label" style="color:#378add">???섎씫 ?붿씤 ({len(neg)})</div>
+      {neg_html if neg_html else '<div class="empty">?놁쓬</div>'}
     </div>
   </div>
 </section>"""
 
-# ── S2: 캘린더 경보 ───────────────────────────────────────────────
+# ?? S2: 罹섎┛??寃쎈낫 ???????????????????????????????????????????????
 
 def render_s2(radar):
     alerts = radar.get("calendar_alerts", [])
     if not alerts:
-        return '<section id="s2" class="section"><h2 class="sec-title">📅 S2 — 캘린더 경보</h2><div class="empty">D-30 이내 이벤트 없음</div></section>'
+        return '<section id="s2" class="section"><h2 class="sec-title">?뱟 S2 ??罹섎┛??寃쎈낫</h2><div class="empty">D-30 ?대궡 ?대깽???놁쓬</div></section>'
 
-    DAY_KO = ["월","화","수","목","금","토","일"]
+    DAY_KO = ["??,"??,"??,"紐?,"湲?,"??,"??]
 
     def _fmt_date(date_str):
         try:
@@ -357,7 +354,7 @@ def render_s2(radar):
             d = _dt.strptime(date_str, "%Y-%m-%d")
             return f"{d.month:02d}.{d.day:02d}", DAY_KO[d.weekday()]
         except Exception:
-            return (date_str[:5] if date_str else "—"), ""
+            return (date_str[:5] if date_str else "??), ""
 
     BADGE_COLOR = {"HIGH": "#e53935", "MID": "#ef9f27", "LOW": "#378add"}
 
@@ -372,8 +369,8 @@ def render_s2(radar):
         ev_date   = a.get("date", "")
         badge_col = BADGE_COLOR.get(u, "#378add")
         md, dow   = _fmt_date(ev_date)
-        onclick   = f"showInfoPopup('{ev_name}', '{note_esc}', 'D-{days} | {ev_date}', '수혜 섹터: {sectors}', '{boost_str}', '{u} 긴급도')"
-        sector_note = f"수혜: {sectors}" + (f" | {a.get('note','')}" if a.get("note") else "")
+        onclick   = f"showInfoPopup('{ev_name}', '{note_esc}', 'D-{days} | {ev_date}', '?섑삙 ?뱁꽣: {sectors}', '{boost_str}', '{u} 湲닿툒??)"
+        sector_note = f"?섑삙: {sectors}" + (f" | {a.get('note','')}" if a.get("note") else "")
         html += f"""
         <div class="cal-row" onclick="{onclick}" style="cursor:pointer">
           <div class="cal-date">{md}<br><span style="font-size:11px;font-weight:400;color:#aaa">{dow}</span></div>
@@ -394,38 +391,38 @@ def render_s2(radar):
     .cal-badge{{display:inline-block;font-size:10px;padding:2px 8px;border-radius:10px;margin-left:8px}}
     .cal-sector{{font-size:11px;color:#aaa;margin-top:4px}}
   </style>
-  <h2 class="sec-title">📅 S2 — 캘린더 경보 ({len(alerts)}건) <span style="font-size:11px;color:#888;font-weight:400">클릭 → 상세</span></h2>
+  <h2 class="sec-title">?뱟 S2 ??罹섎┛??寃쎈낫 ({len(alerts)}嫄? <span style="font-size:11px;color:#888;font-weight:400">?대┃ ???곸꽭</span></h2>
   {html}
 </section>"""
 
-# ── S3/S4: 급등예상 TOP10 + 클릭 팝업 상세 ──────────────────────
+# ?? S3/S4: 湲됰벑?덉긽 TOP10 + ?대┃ ?앹뾽 ?곸꽭 ??????????????????????
 
 def score_winrate(score):
-    """점수대별 D+1 승률 (백테스트 기반)"""
+    """?먯닔?蹂?D+1 ?밸쪧 (諛깊뀒?ㅽ듃 湲곕컲)"""
     try:
         s = float(score)
-        if s >= 95: return 0,  "극소수 데이터 — 신뢰 낮음"
-        if s >= 90: return 9,  "9% (평균수익 -2.2%)"
-        if s >= 85: return 29, "29% ✅ 최고 승률 구간"
-        if s >= 80: return 14, "14% (평균수익 -2.9%)"
-        if s >= 70: return 17, "17% (평균수익 -1.4%)"
-        if s >= 60: return 18, "18% (평균수익 -2.3%)"
-        return 10, "10% 미만 — 참고용"
+        if s >= 95: return 0,  "洹뱀냼???곗씠?????좊ː ??쓬"
+        if s >= 90: return 9,  "9% (?됯퇏?섏씡 -2.2%)"
+        if s >= 85: return 29, "29% ??理쒓퀬 ?밸쪧 援ш컙"
+        if s >= 80: return 14, "14% (?됯퇏?섏씡 -2.9%)"
+        if s >= 70: return 17, "17% (?됯퇏?섏씡 -1.4%)"
+        if s >= 60: return 18, "18% (?됯퇏?섏씡 -2.3%)"
+        return 10, "10% 誘몃쭔 ??李멸퀬??
     except Exception:
-        return 0, "데이터 없음"
+        return 0, "?곗씠???놁쓬"
 
 def score_holding(score, ma, rsi):
-    """예상 보유 기간 추정"""
+    """?덉긽 蹂댁쑀 湲곌컙 異붿젙"""
     try:
         s = float(score)
         r = float(rsi) if rsi else 50
         if s >= 85 and ma == "3ma_bull" and r < 65:
-            return "D+1~3 스윙", "#1D9E75"
+            return "D+1~3 ?ㅼ쐷", "#1D9E75"
         if s >= 70 and ma == "3ma_bull":
-            return "D+1 단타", "#EF9F27"
-        return "당일 관찰 후 판단", "#888"
+            return "D+1 ?⑦?", "#EF9F27"
+        return "?뱀씪 愿李????먮떒", "#888"
     except Exception:
-        return "판단 불가", "#888"
+        return "?먮떒 遺덇?", "#888"
 
 def render_score_bar(label, val, max_val, color="#378ADD"):
     try:
@@ -443,7 +440,7 @@ def render_score_bar(label, val, max_val, color="#378ADD"):
     </div>"""
 
 def build_popup_data(top10, news_map, backtest):
-    """종목별 팝업 데이터 JSON 생성"""
+    """醫낅ぉ蹂??앹뾽 ?곗씠??JSON ?앹꽦"""
     popups = {}
     bands  = backtest.get("score_bands", {})
 
@@ -456,7 +453,7 @@ def build_popup_data(top10, news_map, backtest):
         wr, wr_note  = score_winrate(score)
         holding, h_color = score_holding(score, ma, rsi)
 
-        # 점수 구성 (각 컴포넌트)
+        # ?먯닔 援ъ꽦 (媛?而댄룷?뚰듃)
         tech_s = r.get("tech_score", 0)
         news_s = r.get("news_score", 0)
         inv_s  = r.get("investor_score", 0)
@@ -464,39 +461,39 @@ def build_popup_data(top10, news_map, backtest):
         fund_s = r.get("fund_score", 0)
         decay_s= r.get("decay_score", 0)
 
-        # 뉴스
+        # ?댁뒪
         news_row = news_map.get(ticker, {})
         news_title = news_row.get("title", "") if news_row else ""
         news_link  = news_row.get("link", "#") if news_row else "#"
 
-        # 리스크 판단
+        # 由ъ뒪???먮떒
         risks = []
         try:
-            if float(rsi) > 70: risks.append("RSI 과매수 — 단기 조정 가능")
+            if float(rsi) > 70: risks.append("RSI 怨쇰ℓ?????④린 議곗젙 媛??)
         except Exception: pass
-        if ma == "bearish": risks.append("MA 역배열 — 하락 추세 중")
+        if ma == "bearish": risks.append("MA ??같?????섎씫 異붿꽭 以?)
         if str(r.get("decay_flag","")) not in ("FRESH",""):
-            risks.append(f"신호 노후화({r.get('decay_flag','')}) — 진입 타이밍 주의")
+            risks.append(f"?좏샇 ?명썑??{r.get('decay_flag','')}) ??吏꾩엯 ??대컢 二쇱쓽")
         if str(r.get("signal_timeout","")).lower() == "true":
-            risks.append("신호 타임아웃 임박")
-        if not risks: risks.append("특이 리스크 없음")
+            risks.append("?좏샇 ??꾩븘???꾨컯")
+        if not risks: risks.append("?뱀씠 由ъ뒪???놁쓬")
 
-        # MA 해석
+        # MA ?댁꽍
         ma_map = {
-            "3ma_bull":  "✅ 3MA 정배열 — 단기/중기/장기 모두 우상향",
-            "2ma_bull":  "⚡ 2MA 부분 정배열 — 추세 전환 초입",
-            "bearish":   "⚠️ 역배열 — 하락 추세, 반등 시 진입 고려",
+            "3ma_bull":  "??3MA ?뺣같?????④린/以묎린/?κ린 紐⑤몢 ?곗긽??,
+            "2ma_bull":  "??2MA 遺遺??뺣같????異붿꽭 ?꾪솚 珥덉엯",
+            "bearish":   "?좑툘 ??같?????섎씫 異붿꽭, 諛섎벑 ??吏꾩엯 怨좊젮",
         }
         ma_desc = ma_map.get(ma, ma)
 
-        # vol 해석
+        # vol ?댁꽍
         vol_map = {
-            "healthy_strong":              "거래량 건강 — 강한 매수세",
-            "healthy_strong_accumulation": "거래량 건강 — 매집 패턴",
-            "healthy_mid":                 "거래량 보통 — 정상 수준",
-            "neutral_high":                "거래량 중립 — 관망 구간",
-            "sellout_warn":                "⚠️ 매도 경고 — 거래량 급증",
-            "sellout_strong":              "🚨 강한 매도 — 주의 필요",
+            "healthy_strong":              "嫄곕옒??嫄닿컯 ??媛뺥븳 留ㅼ닔??,
+            "healthy_strong_accumulation": "嫄곕옒??嫄닿컯 ??留ㅼ쭛 ?⑦꽩",
+            "healthy_mid":                 "嫄곕옒??蹂댄넻 ???뺤긽 ?섏?",
+            "neutral_high":                "嫄곕옒??以묐┰ ??愿留?援ш컙",
+            "sellout_warn":                "?좑툘 留ㅻ룄 寃쎄퀬 ??嫄곕옒??湲됱쬆",
+            "sellout_strong":              "?슚 媛뺥븳 留ㅻ룄 ??二쇱쓽 ?꾩슂",
         }
         vol_desc = vol_map.get(r.get("vol_gap_label",""), r.get("vol_gap_label",""))
 
@@ -529,22 +526,21 @@ def build_popup_data(top10, news_map, backtest):
 
 def render_s3_s4(top10, news_map, backtest):
     if not top10:
-        return '<section id="s3" class="section"><h2 class="sec-title">🚀 S3 — 급등예상 TOP10</h2><div class="empty">신호 없음</div></section>'
+        return '<section id="s3" class="section"><h2 class="sec-title">?? S3 ??湲됰벑?덉긽 TOP10</h2><div class="empty">?좏샇 ?놁쓬</div></section>'
 
     popups = build_popup_data(top10, news_map, backtest)
     popup_json = json.dumps(popups, ensure_ascii=False)
 
-    # 용어 정의 데이터
-    GLOSSARY = {
-        "점수(pt)": "SFD 종합 점수 (최대 225pt). 기술(93)+뉴스(30)+수급(20)+테마(10)+펀더멘탈(15)+부스트 합산. 높을수록 매수 조건 충족",
-        "신호": "RESERVE_BUY(매수후보): 점수 70pt 이상 / WATCH_ONLY(관심): 50pt 이상 / SIGNAL_EXPIRED: 5봉 이상 경과로 신호 만료",
-        "D+1 승률": "이 점수대 종목이 다음날(D+1) 플러스 마감한 역사적 비율. 85~90pt 구간이 29%로 최고. 100%는 없으므로 참고용",
-        "트리거": "📰뉴스: 뉴스 감성점수 5pt 이상 / 💰수급: 외국인·기관 순매수 10pt 이상 / 📈기술: 3MA 정배열",
-        "보유기간": "D+1 단타: 내일 하루 / D+3~5 스윙: 3~5일 보유 전략 / 당일 관찰: 추가 확인 후 판단",
-        "RSI": "상대강도지수(0~100). 70 이상: 과매수(단기 조정 주의) / 30 이하: 과매도(반등 기대) / 50 근처: 중립",
-        "MA배열": "이동평균선 배열. 정배열(3MA_BULL): 단기>중기>장기로 우상향 → 매수 유리. 역배열: 하락 추세",
-        "Decay": "신호 노후화 지표. FRESH: 오늘 발생 / 숫자 클수록 오래된 신호 → 진입 타이밍 주의",
-        "전일종가": "전 거래일 마감 기준 주가. 당일 등락률 판단의 기준점",
+    # ?⑹뼱 ?뺤쓽 ?곗씠??    GLOSSARY = {
+        "?먯닔(pt)": "SFD 醫낇빀 ?먯닔 (理쒕? 225pt). 湲곗닠(93)+?댁뒪(30)+?섍툒(20)+?뚮쭏(10)+??붾찘??15)+遺?ㅽ듃 ?⑹궛. ?믪쓣?섎줉 留ㅼ닔 議곌굔 異⑹”",
+        "?좏샇": "RESERVE_BUY(留ㅼ닔?꾨낫): ?먯닔 70pt ?댁긽 / WATCH_ONLY(愿??: 50pt ?댁긽 / SIGNAL_EXPIRED: 5遊??댁긽 寃쎄낵濡??좏샇 留뚮즺",
+        "D+1 ?밸쪧": "???먯닔? 醫낅ぉ???ㅼ쓬??D+1) ?뚮윭??留덇컧????궗??鍮꾩쑉. 85~90pt 援ш컙??29%濡?理쒓퀬. 100%???놁쑝誘濡?李멸퀬??,
+        "?몃━嫄?: "?벐?댁뒪: ?댁뒪 媛먯꽦?먯닔 5pt ?댁긽 / ?뮥?섍툒: ?멸뎅?맞룰린愿 ?쒕ℓ??10pt ?댁긽 / ?뱢湲곗닠: 3MA ?뺣같??,
+        "蹂댁쑀湲곌컙": "D+1 ?⑦?: ?댁씪 ?섎（ / D+3~5 ?ㅼ쐷: 3~5??蹂댁쑀 ?꾨왂 / ?뱀씪 愿李? 異붽? ?뺤씤 ???먮떒",
+        "RSI": "?곷?媛뺣룄吏??0~100). 70 ?댁긽: 怨쇰ℓ???④린 議곗젙 二쇱쓽) / 30 ?댄븯: 怨쇰ℓ??諛섎벑 湲곕?) / 50 洹쇱쿂: 以묐┰",
+        "MA諛곗뿴": "?대룞?됯퇏??諛곗뿴. ?뺣같??3MA_BULL): ?④린>以묎린>?κ린濡??곗긽????留ㅼ닔 ?좊━. ??같?? ?섎씫 異붿꽭",
+        "Decay": "?좏샇 ?명썑??吏?? FRESH: ?ㅻ뒛 諛쒖깮 / ?レ옄 ?댁닔濡??ㅻ옒???좏샇 ??吏꾩엯 ??대컢 二쇱쓽",
+        "?꾩씪醫낃?": "??嫄곕옒??留덇컧 湲곗? 二쇨?. ?뱀씪 ?깅씫瑜??먮떒??湲곗???,
     }
 
     rows = ""
@@ -558,10 +554,10 @@ def render_s3_s4(top10, news_map, backtest):
         ma      = r.get("ma_align","")
         news_s  = r.get("news_score", 0)
         inv_s   = r.get("investor_score", 0)
-        # 전일종가: prev_close 또는 sfd_technical에서 올 수 있음
+        # ?꾩씪醫낃?: prev_close ?먮뒗 sfd_technical?먯꽌 ?????덉쓬
         prev_close = r.get("prev_close","") or r.get("close","") or ""
         try:
-            prev_close_str = f"{float(prev_close):,.0f}원"
+            prev_close_str = f"{float(prev_close):,.0f}??
         except Exception:
             prev_close_str = "-"
 
@@ -570,17 +566,17 @@ def render_s3_s4(top10, news_map, backtest):
 
         trigger = []
         try:
-            if float(news_s) >= 5:  trigger.append("📰뉴스")
-            if float(inv_s) >= 10:  trigger.append("💰수급")
-            if ma == "3ma_bull":    trigger.append("📈기술")
+            if float(news_s) >= 5:  trigger.append("?벐?댁뒪")
+            if float(inv_s) >= 10:  trigger.append("?뮥?섍툒")
+            if ma == "3ma_bull":    trigger.append("?뱢湲곗닠")
         except Exception: pass
-        trigger_str = " ".join(trigger) if trigger else "📈기술"
+        trigger_str = " ".join(trigger) if trigger else "?뱢湲곗닠"
 
         news_row   = news_map.get(ticker)
         news_title = (news_row.get("title","")[:30] + "...") if news_row else ""
 
         wr_color  = "#1D9E75" if wr >= 25 else "#EF9F27" if wr >= 15 else "#888"
-        # 순위별 배경 강조
+        # ?쒖쐞蹂?諛곌꼍 媛뺤“
         rank_style = "background:#fff8f0" if i <= 3 else ""
 
         rows += f"""
@@ -606,18 +602,17 @@ def render_s3_s4(top10, news_map, backtest):
           <td style="font-size:11px;color:#555">{news_title}</td>
           <td>
             <span style="font-size:13px;font-weight:500;color:{wr_color}">{wr}%</span><br>
-            <span style="font-size:9px;color:#aaa">D+1 승률</span>
+            <span style="font-size:9px;color:#aaa">D+1 ?밸쪧</span>
           </td>
           <td>
             <button onclick="event.stopPropagation();showPopup('{ticker}')"
               style="font-size:11px;padding:3px 10px;border-radius:20px;border:0.5px solid #ddd;
                      background:#f8f8f6;cursor:pointer;color:#333">
-              상세▶
-            </button>
+              ?곸꽭??            </button>
           </td>
         </tr>"""
 
-    # 용어 정의 패널 (접기/펼치기)
+    # ?⑹뼱 ?뺤쓽 ?⑤꼸 (?묎린/?쇱튂湲?
     glossary_items = "".join(
         f'<div style="padding:8px 0;border-bottom:0.5px solid #f0f0ee">'
         f'<span style="font-weight:500;font-size:12px;color:#333">{k}</span>'
@@ -629,14 +624,14 @@ def render_s3_s4(top10, news_map, backtest):
       <button onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'"
         style="font-size:12px;padding:6px 14px;border-radius:20px;border:0.5px solid #ddd;
                background:#f8f8f6;cursor:pointer;color:#555;margin-bottom:8px">
-        📖 용어 정의 (펼치기/접기)
+        ?뱰 ?⑹뼱 ?뺤쓽 (?쇱튂湲??묎린)
       </button>
       <div style="display:none;background:#f8f8f6;border-radius:10px;padding:12px 16px">
         {glossary_items}
       </div>
     </div>"""
 
-    # 팝업 HTML
+    # ?앹뾽 HTML
     popup_html = """
 <div id="popup-overlay" onclick="closePopup()"
   style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;
@@ -646,7 +641,7 @@ def render_s3_s4(top10, news_map, backtest):
            padding:28px;position:relative">
     <button onclick="closePopup()"
       style="position:absolute;top:16px;right:16px;background:none;border:none;
-             font-size:20px;cursor:pointer;color:#888">✕</button>
+             font-size:20px;cursor:pointer;color:#888">??/button>
     <div id="popup-content"></div>
   </div>
 </div>"""
@@ -660,17 +655,16 @@ function showPopup(ticker) {{
   if (!d) return;
 
   const sigColor = d.signal === 'RESERVE_BUY' ? '#e24b4a' : '#EF9F27';
-  const sigLabel = d.signal === 'RESERVE_BUY' ? '⭐ 매수후보' : '👁 관심';
+  const sigLabel = d.signal === 'RESERVE_BUY' ? '狩?留ㅼ닔?꾨낫' : '?몓 愿??;
 
-  // 점수 구성 바
-  const totalScore = parseFloat(d.score) || 0;
+  // ?먯닔 援ъ꽦 諛?  const totalScore = parseFloat(d.score) || 0;
   const bars = [
-    ['기술점수 (MA/RSI/볼륨)', d.tech_s, 93, '#378ADD'],
-    ['뉴스점수', d.news_s, 30, '#7F77DD'],
-    ['수급점수 (외국인/기관)', d.inv_s, 20, '#1D9E75'],
-    ['테마점수', d.theme_s, 10, '#EF9F27'],
-    ['펀더멘탈점수', d.fund_s, 15, '#639922'],
-    ['Decay 패널티', d.decay_s, 0, '#E24B4A'],
+    ['湲곗닠?먯닔 (MA/RSI/蹂쇰ⅷ)', d.tech_s, 93, '#378ADD'],
+    ['?댁뒪?먯닔', d.news_s, 30, '#7F77DD'],
+    ['?섍툒?먯닔 (?멸뎅??湲곌?)', d.inv_s, 20, '#1D9E75'],
+    ['?뚮쭏?먯닔', d.theme_s, 10, '#EF9F27'],
+    ['??붾찘?덉젏??, d.fund_s, 15, '#639922'],
+    ['Decay ?⑤꼸??, d.decay_s, 0, '#E24B4A'],
   ].map(([label, val, max, color]) => {{
     const pct = max > 0 ? Math.min(100, parseFloat(val||0) / max * 100) : 0;
     const isNeg = parseFloat(val||0) < 0;
@@ -685,46 +679,46 @@ function showPopup(ticker) {{
     </div>`;
   }}).join('');
 
-  // 승률 게이지
+  // ?밸쪧 寃뚯씠吏
   const wrPct = d.winrate;
   const wrColor = wrPct >= 25 ? '#1D9E75' : wrPct >= 15 ? '#EF9F27' : '#888';
 
-  // 리스크 항목
+  // 由ъ뒪????ぉ
   const riskHtml = d.risks.map(r =>
-    `<div style="font-size:12px;padding:4px 0;border-bottom:0.5px solid #f0f0ee;color:#555">⚠️ ${{r}}</div>`
+    `<div style="font-size:12px;padding:4px 0;border-bottom:0.5px solid #f0f0ee;color:#555">?좑툘 ${{r}}</div>`
   ).join('');
 
-  // 뉴스
+  // ?댁뒪
   const newsHtml = d.news_title
     ? `<a href="${{d.news_link}}" target="_blank"
          style="display:block;background:#f0f4ff;padding:8px 12px;border-radius:8px;
                 font-size:12px;color:#333;text-decoration:none;margin-top:8px">
-         📰 ${{d.news_title}}
+         ?벐 ${{d.news_title}}
        </a>`
-    : '<div style="font-size:12px;color:#aaa;margin-top:8px">관련 뉴스 없음</div>';
+    : '<div style="font-size:12px;color:#aaa;margin-top:8px">愿???댁뒪 ?놁쓬</div>';
 
   document.getElementById('popup-content').innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px">
       <div>
         <div style="font-size:22px;font-weight:500">${{d.name}}</div>
-        <div style="font-size:12px;color:#888;margin-top:2px">${{d.ticker}} · ${{d.sector}}</div>
+        <div style="font-size:12px;color:#888;margin-top:2px">${{d.ticker}} 쨌 ${{d.sector}}</div>
         <span style="background:${{sigColor}};color:#fff;padding:2px 10px;border-radius:20px;
                      font-size:11px;font-weight:500;margin-top:6px;display:inline-block">${{sigLabel}}</span>
       </div>
       <div style="text-align:right">
         <div style="font-size:36px;font-weight:500;color:#e24b4a">${{d.score}}<span style="font-size:14px">pt</span></div>
-        <div style="font-size:11px;color:#888">최대 225pt 기준</div>
+        <div style="font-size:11px;color:#888">理쒕? 225pt 湲곗?</div>
       </div>
     </div>
 
     <div style="background:#f8f8f6;border-radius:10px;padding:14px;margin-bottom:14px">
-      <div style="font-size:11px;font-weight:500;color:#888;margin-bottom:10px;text-transform:uppercase;letter-spacing:.06em">점수 구성 — 왜 이 점수인가</div>
+      <div style="font-size:11px;font-weight:500;color:#888;margin-bottom:10px;text-transform:uppercase;letter-spacing:.06em">?먯닔 援ъ꽦 ???????먯닔?멸?</div>
       ${{bars}}
     </div>
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
       <div style="background:#f8f8f6;border-radius:10px;padding:12px">
-        <div style="font-size:11px;color:#888;margin-bottom:6px">D+1 승률 (백테스트)</div>
+        <div style="font-size:11px;color:#888;margin-bottom:6px">D+1 ?밸쪧 (諛깊뀒?ㅽ듃)</div>
         <div style="font-size:28px;font-weight:500;color:${{wrColor}}">${{wrPct}}%</div>
         <div style="font-size:10px;color:#888;margin-top:2px">${{d.wr_note}}</div>
         <div style="height:6px;background:#eee;border-radius:3px;margin-top:6px">
@@ -732,14 +726,14 @@ function showPopup(ticker) {{
         </div>
       </div>
       <div style="background:#f8f8f6;border-radius:10px;padding:12px">
-        <div style="font-size:11px;color:#888;margin-bottom:6px">예상 보유 기간</div>
+        <div style="font-size:11px;color:#888;margin-bottom:6px">?덉긽 蹂댁쑀 湲곌컙</div>
         <div style="font-size:16px;font-weight:500;color:${{d.h_color}};margin-top:4px">${{d.holding}}</div>
-        <div style="margin-top:10px;font-size:11px;color:#666">RSI: ${{d.rsi}} | ${{d.ma_desc.split('—')[0].trim()}}</div>
+        <div style="margin-top:10px;font-size:11px;color:#666">RSI: ${{d.rsi}} | ${{d.ma_desc.split('??)[0].trim()}}</div>
       </div>
     </div>
 
     <div style="background:#f8f8f6;border-radius:10px;padding:12px;margin-bottom:14px">
-      <div style="font-size:11px;color:#888;margin-bottom:6px">기술적 분석</div>
+      <div style="font-size:11px;color:#888;margin-bottom:6px">湲곗닠??遺꾩꽍</div>
       <div style="font-size:12px;color:#333;margin-bottom:4px">${{d.ma_desc}}</div>
       <div style="font-size:12px;color:#555">${{d.vol_desc}}</div>
     </div>
@@ -747,13 +741,13 @@ function showPopup(ticker) {{
     ${{newsHtml}}
 
     <div style="margin-top:14px">
-      <div style="font-size:11px;color:#888;margin-bottom:6px">리스크 요인</div>
+      <div style="font-size:11px;color:#888;margin-bottom:6px">由ъ뒪???붿씤</div>
       ${{riskHtml}}
     </div>
 
     <div style="margin-top:16px;background:#EEEDFE;padding:10px 14px;border-radius:8px;font-size:11px;color:#534AB7">
-      ℹ️ 본 점수는 기술/뉴스/수급/테마/펀더멘탈 복합 지표입니다.
-      D+1 승률은 과거 백테스트 기준이며 미래 수익을 보장하지 않습니다.
+      ?뱄툘 蹂??먯닔??湲곗닠/?댁뒪/?섍툒/?뚮쭏/??붾찘??蹂듯빀 吏?쒖엯?덈떎.
+      D+1 ?밸쪧? 怨쇨굅 諛깊뀒?ㅽ듃 湲곗??대ŉ 誘몃옒 ?섏씡??蹂댁옣?섏? ?딆뒿?덈떎.
     </div>
   `;
 
@@ -774,20 +768,20 @@ document.addEventListener('keydown', function(e) {{
     return f"""
 {popup_html}
 <section id="s3" class="section">
-  <h2 class="sec-title">🚀 S3 — 급등예상 TOP20 <span style="font-size:11px;color:#888;font-weight:400">종목 클릭 → 상세 | 헤더 ❓ 클릭 → 용어 설명</span></h2>
+  <h2 class="sec-title">?? S3 ??湲됰벑?덉긽 TOP20 <span style="font-size:11px;color:#888;font-weight:400">醫낅ぉ ?대┃ ???곸꽭 | ?ㅻ뜑 ???대┃ ???⑹뼱 ?ㅻ챸</span></h2>
   <div style="overflow-x:auto">
   <table class="data-table" style="min-width:780px">
     <thead>
       <tr>
         <th style="width:32px">#</th>
-        <th>종목</th>
-        <th onclick="showInfoPopup('신호 등급 설명','RESERVE_BUY ⭐매수후보: 종합점수 70pt 이상, 즉시 관심 필요\\nWATCH_ONLY 👁관심: 50pt 이상, 모니터링 대상\\nSIGNAL_EXPIRED ⚠: 신호 발생 후 5봉 이상 경과로 타이밍 만료 — 신규 진입 비권고','','','📌 신호 용어')" style="cursor:pointer;color:#378ADD">신호 ❓</th>
-        <th onclick="showInfoPopup('점수(pt) 구성 설명','SFD 종합 점수 최대 225pt\\n\\n기술점수 최대 93pt: MA배열/RSI/거래량 패턴\\n뉴스점수 최대 30pt: 관련 뉴스 감성 분석\\n수급점수 최대 20pt: 외국인·기관 순매수\\n테마점수 10pt: 섹터 테마 해당 여부\\n펀더멘탈 15pt: 재무 건전성\\n글로벌부스트 ±20pt: 미국 연동 종목\\n\\n70pt 이상이 매수후보, 85~90pt 구간이 역사적 최고 승률(29%)','','','📌 점수 용어')" style="cursor:pointer;color:#378ADD">점수 ❓</th>
-        <th onclick="showInfoPopup('전일 종가 의미','전 거래일 장 마감 기준 주가(원)\\n오늘 시장 시작 시 이 가격 대비 등락률로 판단\\n거래 전 호가 확인 권장','','','📌 전일종가')" style="cursor:pointer;color:#378ADD">전일종가 ❓</th>
-        <th>섹터</th>
-        <th onclick="showInfoPopup('트리거 & 보유기간 설명','트리거 유형:\\n📰뉴스: 관련 뉴스 감성점수 5pt 이상\\n💰수급: 외국인·기관 순매수 10pt 이상\\n📈기술: 3MA 정배열(단기>중기>장기 우상향)\\n\\n예상 보유기간:\\nD+1 단타: 내일 하루 목표\\nD+3~5 스윙: 3~5일 보유 전략\\n당일 관찰: 추가 확인 후 판단','','','📌 트리거/기간 용어')" style="cursor:pointer;color:#378ADD">트리거/기간 ❓</th>
-        <th>뉴스</th>
-        <th onclick="showInfoPopup('D+1 승률 해설','백테스트 기간: 2026.05~06 (7거래일, 1,409건)\\n\\n점수별 D+1 익일 양봉 확률:\\n85-90pt: 29% ✅ 최고 구간\\n70-80pt: 17%\\n60-70pt: 18%\\n90-95pt: 9% (역설적으로 낮음)\\n\\n⚠️ 승률 50% 미만이 정상입니다\\n주식시장 특성상 100% 예측은 불가능\\n이 지표는 선택의 참고 기준입니다','','','📌 D+1승률 용어')" style="cursor:pointer;color:#378ADD">D+1승률 ❓</th>
+        <th>醫낅ぉ</th>
+        <th onclick="showInfoPopup('?좏샇 ?깃툒 ?ㅻ챸','RESERVE_BUY 狩먮ℓ?섑썑蹂? 醫낇빀?먯닔 70pt ?댁긽, 利됱떆 愿???꾩슂\\nWATCH_ONLY ?몓愿?? 50pt ?댁긽, 紐⑤땲?곕쭅 ???\nSIGNAL_EXPIRED ?? ?좏샇 諛쒖깮 ??5遊??댁긽 寃쎄낵濡???대컢 留뚮즺 ???좉퇋 吏꾩엯 鍮꾧텒怨?,'','','?뱦 ?좏샇 ?⑹뼱')" style="cursor:pointer;color:#378ADD">?좏샇 ??/th>
+        <th onclick="showInfoPopup('?먯닔(pt) 援ъ꽦 ?ㅻ챸','SFD 醫낇빀 ?먯닔 理쒕? 225pt\\n\\n湲곗닠?먯닔 理쒕? 93pt: MA諛곗뿴/RSI/嫄곕옒???⑦꽩\\n?댁뒪?먯닔 理쒕? 30pt: 愿???댁뒪 媛먯꽦 遺꾩꽍\\n?섍툒?먯닔 理쒕? 20pt: ?멸뎅?맞룰린愿 ?쒕ℓ??\n?뚮쭏?먯닔 10pt: ?뱁꽣 ?뚮쭏 ?대떦 ?щ?\\n??붾찘??15pt: ?щТ 嫄댁쟾??\n湲濡쒕쾶遺?ㅽ듃 짹20pt: 誘멸뎅 ?곕룞 醫낅ぉ\\n\\n70pt ?댁긽??留ㅼ닔?꾨낫, 85~90pt 援ш컙????궗??理쒓퀬 ?밸쪧(29%)','','','?뱦 ?먯닔 ?⑹뼱')" style="cursor:pointer;color:#378ADD">?먯닔 ??/th>
+        <th onclick="showInfoPopup('?꾩씪 醫낃? ?섎?','??嫄곕옒????留덇컧 湲곗? 二쇨?(??\\n?ㅻ뒛 ?쒖옣 ?쒖옉 ????媛寃??鍮??깅씫瑜좊줈 ?먮떒\\n嫄곕옒 ???멸? ?뺤씤 沅뚯옣','','','?뱦 ?꾩씪醫낃?')" style="cursor:pointer;color:#378ADD">?꾩씪醫낃? ??/th>
+        <th>?뱁꽣</th>
+        <th onclick="showInfoPopup('?몃━嫄?& 蹂댁쑀湲곌컙 ?ㅻ챸','?몃━嫄??좏삎:\\n?벐?댁뒪: 愿???댁뒪 媛먯꽦?먯닔 5pt ?댁긽\\n?뮥?섍툒: ?멸뎅?맞룰린愿 ?쒕ℓ??10pt ?댁긽\\n?뱢湲곗닠: 3MA ?뺣같???④린>以묎린>?κ린 ?곗긽??\\n\\n?덉긽 蹂댁쑀湲곌컙:\\nD+1 ?⑦?: ?댁씪 ?섎（ 紐⑺몴\\nD+3~5 ?ㅼ쐷: 3~5??蹂댁쑀 ?꾨왂\\n?뱀씪 愿李? 異붽? ?뺤씤 ???먮떒','','','?뱦 ?몃━嫄?湲곌컙 ?⑹뼱')" style="cursor:pointer;color:#378ADD">?몃━嫄?湲곌컙 ??/th>
+        <th>?댁뒪</th>
+        <th onclick="showInfoPopup('D+1 ?밸쪧 ?댁꽕','諛깊뀒?ㅽ듃 湲곌컙: 2026.05~06 (7嫄곕옒?? 1,409嫄?\\n\\n?먯닔蹂?D+1 ?듭씪 ?묐큺 ?뺣쪧:\\n85-90pt: 29% ??理쒓퀬 援ш컙\\n70-80pt: 17%\\n60-70pt: 18%\\n90-95pt: 9% (??꽕?곸쑝濡???쓬)\\n\\n?좑툘 ?밸쪧 50% 誘몃쭔???뺤긽?낅땲??\n二쇱떇?쒖옣 ?뱀꽦??100% ?덉륫? 遺덇???\n??吏?쒕뒗 ?좏깮??李멸퀬 湲곗??낅땲??,'','','?뱦 D+1?밸쪧 ?⑹뼱')" style="cursor:pointer;color:#378ADD">D+1?밸쪧 ??/th>
         <th></th>
       </tr>
     </thead>
@@ -799,38 +793,38 @@ document.addEventListener('keydown', function(e) {{
 <section id="s4" class="section" style="display:none"></section>
 {script}"""
 
-# ── S5: 미래산업 모멘텀 게이지 ───────────────────────────────────
+# ?? S5: 誘몃옒?곗뾽 紐⑤찘? 寃뚯씠吏 ???????????????????????????????????
 
 def render_s5(calendar):
     sectors  = calendar.get("future_industry_monitor", {}).get("sectors", [])
     last_upd = calendar.get("future_industry_monitor", {}).get("last_updated", "")
 
     phase_color = {
-        "초초기":    "#B5D4F4",
-        "초기":      "#378ADD",
-        "초기→성장": "#1D9E75",
-        "성장":      "#639922",
-        "피크":      "#EF9F27",
-        "식는 중":   "#E24B4A",
+        "珥덉큹湲?:    "#B5D4F4",
+        "珥덇린":      "#378ADD",
+        "珥덇린?믪꽦??: "#1D9E75",
+        "?깆옣":      "#639922",
+        "?쇳겕":      "#EF9F27",
+        "?앸뒗 以?:   "#E24B4A",
     }
     phase_pct = {
-        "초초기": 10, "초기": 25, "초기→성장": 40,
-        "성장": 60, "피크": 80, "식는 중": 90,
+        "珥덉큹湲?: 10, "珥덇린": 25, "珥덇린?믪꽦??: 40,
+        "?깆옣": 60, "?쇳겕": 80, "?앸뒗 以?: 90,
     }
     PHASE_DESC = {
-        "초초기":    "아직 주류 투자자 관심 없음 — 선점 기회. 단 변동성 극심, 소액 분산 필수",
-        "초기":      "글로벌 리서치 언급 시작 — 얼리 어답터 진입 구간. 효성중공업 1만원대 시절",
-        "초기→성장": "기관 자금 유입 시작 — 주도주 윤곽 형성 중. 지금이 황금 구간",
-        "성장":      "본격 상승 추세 — 주도 종목 선별 중요. 고점 매수 리스크 증가",
-        "피크":      "과열 경고 — 선점자 차익 실현 구간. 신규 진입 리스크 높음",
-        "식는 중":   "모멘텀 소진 — 다음 사이클 준비 시작. 익절 후 관망 권고",
+        "珥덉큹湲?:    "?꾩쭅 二쇰쪟 ?ъ옄??愿???놁쓬 ???좎젏 湲고쉶. ??蹂?숈꽦 洹뱀떖, ?뚯븸 遺꾩궛 ?꾩닔",
+        "珥덇린":      "湲濡쒕쾶 由ъ꽌移??멸툒 ?쒖옉 ???쇰━ ?대떟??吏꾩엯 援ш컙. ?⑥꽦以묎났??1留뚯썝? ?쒖젅",
+        "珥덇린?믪꽦??: "湲곌? ?먭툑 ?좎엯 ?쒖옉 ??二쇰룄二??ㅺ낸 ?뺤꽦 以? 吏湲덉씠 ?⑷툑 援ш컙",
+        "?깆옣":      "蹂멸꺽 ?곸듅 異붿꽭 ??二쇰룄 醫낅ぉ ?좊퀎 以묒슂. 怨좎젏 留ㅼ닔 由ъ뒪??利앷?",
+        "?쇳겕":      "怨쇱뿴 寃쎄퀬 ???좎젏??李⑥씡 ?ㅽ쁽 援ш컙. ?좉퇋 吏꾩엯 由ъ뒪???믪쓬",
+        "?앸뒗 以?:   "紐⑤찘? ?뚯쭊 ???ㅼ쓬 ?ъ씠??以鍮??쒖옉. ?듭젅 ??愿留?沅뚭퀬",
     }
 
-    # horizon 기준으로 정렬 (짧은 기간 → 긴 기간)
+    # horizon 湲곗??쇰줈 ?뺣젹 (吏㏃? 湲곌컙 ??湲?湲곌컙)
     def horizon_sort_key(s):
-        h = s.get("horizon", "99년")
+        h = s.get("horizon", "99??)
         try:
-            return int(h.split("~")[0].replace("년","").strip())
+            return int(h.split("~")[0].replace("??,"").strip())
         except Exception:
             return 99
 
@@ -838,7 +832,7 @@ def render_s5(calendar):
 
     rows = ""
     for s in sorted_sectors:
-        phase    = s.get("phase", "초기")
+        phase    = s.get("phase", "珥덇린")
         color    = phase_color.get(phase, "#888")
         pct      = phase_pct.get(phase, 30)
         horizon  = s.get('horizon','')
@@ -847,7 +841,7 @@ def render_s5(calendar):
         phase_desc  = PHASE_DESC.get(phase, "")
         signal      = s.get('global_signal','').replace("'","")
         name_esc    = name.replace("'","")
-        onclick = f"showInfoPopup('{horizon} : {name_esc}', '{phase_desc}', '{phase} 단계', '핵심 종목: {tickers_str}', '글로벌 신호: {signal}', '미래산업 모멘텀')"
+        onclick = f"showInfoPopup('{horizon} : {name_esc}', '{phase_desc}', '{phase} ?④퀎', '?듭떖 醫낅ぉ: {tickers_str}', '湲濡쒕쾶 ?좏샇: {signal}', '誘몃옒?곗뾽 紐⑤찘?')"
 
         rows += f"""
         <div class="momentum-row" onclick="{onclick}" style="cursor:pointer;padding:8px;border-radius:8px;transition:background 0.15s" onmouseover="this.style.background='#f8f8f6'" onmouseout="this.style.background=''">
@@ -856,31 +850,31 @@ def render_s5(calendar):
               <span style="font-size:12px;font-weight:500;color:{color};background:{color}18;padding:2px 8px;border-radius:20px;margin-right:8px">{horizon}</span>
               <span style="font-weight:500;font-size:13px">{name}</span>
             </div>
-            <span style="font-size:11px;color:{color};font-weight:500;white-space:nowrap">{phase} ▶</span>
+            <span style="font-size:11px;color:{color};font-weight:500;white-space:nowrap">{phase} ??/span>
           </div>
           <div class="progress-bar">
             <div class="progress-fill" style="width:{pct}%;background:{color}"></div>
           </div>
           <div style="font-size:10px;color:#888;margin-top:3px">
-            핵심 종목: {tickers_str} | {signal}
+            ?듭떖 醫낅ぉ: {tickers_str} | {signal}
           </div>
         </div>"""
 
     return f"""
 <section id="s5" class="section">
-  <h2 class="sec-title">🔭 S5 — 미래산업 모멘텀 <span style="font-size:11px;color:#888;font-weight:400">기간 → 산업 순 | 클릭 → 단계 해설</span></h2>
-  <div style="font-size:11px;color:#888;margin-bottom:12px">업데이트: {last_upd} | 다음: 분기 1회</div>
-  {rows if rows else '<div class="empty">데이터 없음</div>'}
+  <h2 class="sec-title">?뵯 S5 ??誘몃옒?곗뾽 紐⑤찘? <span style="font-size:11px;color:#888;font-weight:400">湲곌컙 ???곗뾽 ??| ?대┃ ???④퀎 ?댁꽕</span></h2>
+  <div style="font-size:11px;color:#888;margin-bottom:12px">?낅뜲?댄듃: {last_upd} | ?ㅼ쓬: 遺꾧린 1??/div>
+  {rows if rows else '<div class="empty">?곗씠???놁쓬</div>'}
   <div class="phase-legend" style="flex-wrap:wrap">
-    <span style="color:#378ADD">■ 초기(얼리)</span>
-    <span style="color:#1D9E75">■ 초기→성장(황금)</span>
-    <span style="color:#639922">■ 성장(주류)</span>
-    <span style="color:#EF9F27">■ 피크(과열)</span>
-    <span style="color:#E24B4A">■ 식는 중(익절)</span>
+    <span style="color:#378ADD">??珥덇린(?쇰━)</span>
+    <span style="color:#1D9E75">??珥덇린?믪꽦???⑷툑)</span>
+    <span style="color:#639922">???깆옣(二쇰쪟)</span>
+    <span style="color:#EF9F27">???쇳겕(怨쇱뿴)</span>
+    <span style="color:#E24B4A">???앸뒗 以??듭젅)</span>
   </div>
 </section>"""
 
-# ── S6: 벤치마킹 + 자가진단 + 적중률 모니터링 ────────────────────
+# ?? S6: 踰ㅼ튂留덊궧 + ?먭?吏꾨떒 + ?곸쨷瑜?紐⑤땲?곕쭅 ????????????????????
 
 def render_s6(backtest, expired, recent_trades=None):
     tiers   = backtest.get("tiers", {})
@@ -889,7 +883,7 @@ def render_s6(backtest, expired, recent_trades=None):
     bands   = backtest.get("score_bands", {})
     meta    = backtest.get("meta", {})
 
-    # 최고 승률 구간
+    # 理쒓퀬 ?밸쪧 援ш컙
     best_band = max(bands.items(), key=lambda x: x[1].get("win_rate", 0)) if bands else ("--", {})
 
     expired_html = ""
@@ -898,11 +892,10 @@ def render_s6(backtest, expired, recent_trades=None):
         ticker_e = e.get("ticker","")
         bars_e   = e.get("signal_bars_elapsed", "?")
         score_e  = e.get("total_score","")
-        onclick_e = f"showInfoPopup('⚠️ {name_e}({ticker_e}) 신호 만료', 'SIGNAL_EXPIRED는 신호 발생 후 5봉(거래일) 이상 경과한 종목입니다. 주가가 충분히 반응하지 않은 것으로 보유 중이라면 포지션 정리를 검토하세요.', '{bars_e}봉 경과 | 점수: {score_e}pt', '권고: 신규 진입 금지', '보유 중이면 손절 기준 재확인', '신호 만료 경고')"
-        expired_html += f'<div class="expired-row" onclick="{onclick_e}" style="cursor:pointer">⚠️ <strong>{name_e}({ticker_e})</strong> — {bars_e}봉 경과 | 클릭 → 처리 방법</div>'
+        onclick_e = f"showInfoPopup('?좑툘 {name_e}({ticker_e}) ?좏샇 留뚮즺', 'SIGNAL_EXPIRED???좏샇 諛쒖깮 ??5遊?嫄곕옒?? ?댁긽 寃쎄낵??醫낅ぉ?낅땲?? 二쇨?媛 異⑸텇??諛섏쓳?섏? ?딆? 寃껋쑝濡?蹂댁쑀 以묒씠?쇰㈃ ?ъ????뺣━瑜?寃?좏븯?몄슂.', '{bars_e}遊?寃쎄낵 | ?먯닔: {score_e}pt', '沅뚭퀬: ?좉퇋 吏꾩엯 湲덉?', '蹂댁쑀 以묒씠硫??먯젅 湲곗? ?ы솗??, '?좏샇 留뚮즺 寃쎄퀬')"
+        expired_html += f'<div class="expired-row" onclick="{onclick_e}" style="cursor:pointer">?좑툘 <strong>{name_e}({ticker_e})</strong> ??{bars_e}遊?寃쎄낵 | ?대┃ ??泥섎━ 諛⑸쾿</div>'
 
-    # 점수 구간별 승률 테이블
-    band_rows = ""
+    # ?먯닔 援ш컙蹂??밸쪧 ?뚯씠釉?    band_rows = ""
     for band, bdata in sorted(bands.items(), key=lambda x: x[0], reverse=True):
         wr  = bdata.get("win_rate", 0)
         cnt = bdata.get("count", 0)
@@ -912,7 +905,7 @@ def render_s6(backtest, expired, recent_trades=None):
         band_rows += f"""
         <tr>
           <td style="font-weight:500;font-size:12px">{band}pt</td>
-          <td style="font-size:12px;text-align:center">{cnt}건</td>
+          <td style="font-size:12px;text-align:center">{cnt}嫄?/td>
           <td>
             <div style="display:flex;align-items:center;gap:6px">
               <div style="flex:1;height:6px;background:#eee;border-radius:3px">
@@ -924,7 +917,7 @@ def render_s6(backtest, expired, recent_trades=None):
           <td style="font-size:12px;text-align:right;color:{'#e24b4a' if float(avg or 0)>=0 else '#378add'}">{avg}%</td>
         </tr>"""
 
-    # 최근 RESERVE_BUY 거래 근거 테이블 HTML 생성
+    # 理쒓렐 RESERVE_BUY 嫄곕옒 洹쇨굅 ?뚯씠釉?HTML ?앹꽦
     recent_table_html = ""
     if recent_trades:
         _rows_html = ""
@@ -951,7 +944,7 @@ def render_s6(backtest, expired, recent_trades=None):
                 _score_str = f"{float(r.get('total_score', '')):,.1f}pt"
             except Exception:
                 _score_str = r.get("total_score", "-") or "-"
-            _win_badge = "✅ 승" if str(_win_raw) in ("1", "True", "true") else "❌ 패"
+            _win_badge = "???? if str(_win_raw) in ("1", "True", "true") else "????
             _rows_html += f"""
         <tr style="border-bottom:1px solid #f0f0f0">
           <td style="padding:5px 8px;font-size:11px;color:#666">{_date}</td>
@@ -964,18 +957,18 @@ def render_s6(backtest, expired, recent_trades=None):
         </tr>"""
         recent_table_html = f"""
   <div style="margin-top:18px">
-    <div class="subsec-label">📋 최근 RESERVE_BUY 거래 근거 (D+1 실적) — 수익률 상위 10건</div>
+    <div class="subsec-label">?뱥 理쒓렐 RESERVE_BUY 嫄곕옒 洹쇨굅 (D+1 ?ㅼ쟻) ???섏씡瑜??곸쐞 10嫄?/div>
     <div style="overflow-x:auto;margin-top:6px">
     <table style="width:100%;border-collapse:collapse;font-size:12px">
       <thead>
         <tr style="background:#f8f8f6;border-bottom:2px solid #ddd">
-          <th style="padding:6px 8px;text-align:left;font-weight:500">날짜</th>
-          <th style="padding:6px 8px;text-align:left;font-weight:500">종목코드</th>
-          <th style="padding:6px 8px;text-align:right;font-weight:500">점수</th>
-          <th style="padding:6px 8px;text-align:right;font-weight:500">진입가</th>
-          <th style="padding:6px 8px;text-align:right;font-weight:500">익일종가</th>
-          <th style="padding:6px 8px;text-align:right;font-weight:500">D+1수익률</th>
-          <th style="padding:6px 8px;text-align:center;font-weight:500">결과</th>
+          <th style="padding:6px 8px;text-align:left;font-weight:500">?좎쭨</th>
+          <th style="padding:6px 8px;text-align:left;font-weight:500">醫낅ぉ肄붾뱶</th>
+          <th style="padding:6px 8px;text-align:right;font-weight:500">?먯닔</th>
+          <th style="padding:6px 8px;text-align:right;font-weight:500">吏꾩엯媛</th>
+          <th style="padding:6px 8px;text-align:right;font-weight:500">?듭씪醫낃?</th>
+          <th style="padding:6px 8px;text-align:right;font-weight:500">D+1?섏씡瑜?/th>
+          <th style="padding:6px 8px;text-align:center;font-weight:500">寃곌낵</th>
         </tr>
       </thead>
       <tbody>{_rows_html}
@@ -984,29 +977,29 @@ def render_s6(backtest, expired, recent_trades=None):
     </div>
   </div>"""
 
-    # 적중률 모니터링 설명
+    # ?곸쨷瑜?紐⑤땲?곕쭅 ?ㅻ챸
     date_range = f"{meta.get('date_range_start','')} ~ {meta.get('date_range_end','')}"
     total_dates = meta.get('total_dates', '--')
     total_records = meta.get('total_records', '--')
 
     return f"""
 <section id="s6" class="section">
-  <h2 class="sec-title">📊 S6 — 적중률 모니터링 & 자가진단</h2>
+  <h2 class="sec-title">?뱤 S6 ???곸쨷瑜?紐⑤땲?곕쭅 & ?먭?吏꾨떒</h2>
 
-  <!-- 핵심 지표 -->
+  <!-- ?듭떖 吏??-->
   <div class="two-col" style="margin-bottom:14px">
     <div class="stat-box">
-      <div class="stat-label">⭐ RESERVE_BUY D+1 승률</div>
+      <div class="stat-label">狩?RESERVE_BUY D+1 ?밸쪧</div>
       <div class="stat-val" style="color:#e24b4a">{reserve.get('win_rate','--')}%</div>
-      <div class="stat-sub">평균수익 {reserve.get('avg_return_d1','--')}% | {reserve.get('count','--')}건 분석</div>
+      <div class="stat-sub">?됯퇏?섏씡 {reserve.get('avg_return_d1','--')}% | {reserve.get('count','--')}嫄?遺꾩꽍</div>
       <div style="height:6px;background:#eee;border-radius:3px;margin-top:8px">
         <div style="width:{min(100, float(reserve.get('win_rate') or 0)*2):.0f}%;height:100%;background:#e24b4a;border-radius:3px"></div>
       </div>
     </div>
     <div class="stat-box">
-      <div class="stat-label">👁 WATCH_ONLY D+1 승률</div>
+      <div class="stat-label">?몓 WATCH_ONLY D+1 ?밸쪧</div>
       <div class="stat-val" style="color:#EF9F27">{watch.get('win_rate','--')}%</div>
-      <div class="stat-sub">평균수익 {watch.get('avg_return_d1','--')}% | {watch.get('count','--')}건 분석</div>
+      <div class="stat-sub">?됯퇏?섏씡 {watch.get('avg_return_d1','--')}% | {watch.get('count','--')}嫄?遺꾩꽍</div>
       <div style="height:6px;background:#eee;border-radius:3px;margin-top:8px">
         <div style="width:{min(100, float(watch.get('win_rate') or 0)*2):.0f}%;height:100%;background:#EF9F27;border-radius:3px"></div>
       </div>
@@ -1014,69 +1007,67 @@ def render_s6(backtest, expired, recent_trades=None):
   </div>
 
   <div class="best-band">
-    ✅ 최고 승률 구간: <strong>{best_band[0]}pt</strong> —
-    승률 {best_band[1].get('win_rate','--')}% |
-    {best_band[1].get('count','--')}건 |
-    평균 D+1 수익 {best_band[1].get('avg_return_d1','--')}%
+    ??理쒓퀬 ?밸쪧 援ш컙: <strong>{best_band[0]}pt</strong> ??    ?밸쪧 {best_band[1].get('win_rate','--')}% |
+    {best_band[1].get('count','--')}嫄?|
+    ?됯퇏 D+1 ?섏씡 {best_band[1].get('avg_return_d1','--')}%
   </div>
 
-  <!-- 점수 구간별 상세 승률 -->
+  <!-- ?먯닔 援ш컙蹂??곸꽭 ?밸쪧 -->
   <div style="margin-top:16px">
-    <div class="subsec-label">점수 구간별 D+1 적중률 상세 (백테스트 {date_range} | {total_dates}거래일 | {total_records}건)</div>
+    <div class="subsec-label">?먯닔 援ш컙蹂?D+1 ?곸쨷瑜??곸꽭 (諛깊뀒?ㅽ듃 {date_range} | {total_dates}嫄곕옒??| {total_records}嫄?</div>
     <div style="overflow-x:auto">
     <table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px">
       <thead>
         <tr style="background:#f8f8f6">
-          <th style="padding:6px 10px;text-align:left;font-weight:500">점수 구간</th>
-          <th style="padding:6px 10px;text-align:center;font-weight:500">샘플수</th>
-          <th style="padding:6px 10px;font-weight:500">D+1 승률</th>
-          <th style="padding:6px 10px;text-align:right;font-weight:500">평균 수익</th>
+          <th style="padding:6px 10px;text-align:left;font-weight:500">?먯닔 援ш컙</th>
+          <th style="padding:6px 10px;text-align:center;font-weight:500">?섑뵆??/th>
+          <th style="padding:6px 10px;font-weight:500">D+1 ?밸쪧</th>
+          <th style="padding:6px 10px;text-align:right;font-weight:500">?됯퇏 ?섏씡</th>
         </tr>
       </thead>
       <tbody>{band_rows}</tbody>
     </table>
     </div>
     <div style="font-size:10px;color:#888;margin-top:6px">
-      ℹ️ 승률 = D+1 종가 > 진입 종가인 비율 | 평균수익 마이너스는 손절 포함 전체 평균
+      ?뱄툘 ?밸쪧 = D+1 醫낃? > 吏꾩엯 醫낃???鍮꾩쑉 | ?됯퇏?섏씡 留덉씠?덉뒪???먯젅 ?ы븿 ?꾩껜 ?됯퇏
     </div>
   </div>
 
   <!-- SIGNAL_EXPIRED -->
-  {f'<div class="subsec-label" style="margin-top:14px;color:#A32D2D">⚠️ SIGNAL_EXPIRED 경고 ({len(expired)}건) — 포지션 정리 검토</div>' if expired else ''}
+  {f'<div class="subsec-label" style="margin-top:14px;color:#A32D2D">?좑툘 SIGNAL_EXPIRED 寃쎄퀬 ({len(expired)}嫄? ???ъ????뺣━ 寃??/div>' if expired else ''}
   {expired_html}
 
-  <!-- 누적 적중률 추적 안내 -->
+  <!-- ?꾩쟻 ?곸쨷瑜?異붿쟻 ?덈궡 -->
   <div style="margin-top:16px;background:#E1F5EE;border-radius:10px;padding:14px;cursor:pointer"
-       onclick="showInfoPopup('📈 누적 적중률 트래킹 시스템', '매일 15:35 레포트에서 전일 TOP20 종목의 D+1 실제 수익률을 자동 집계합니다. 이 데이터가 쌓이면 BM(벤치마크 모듈) 가중치를 자동 조정하여 점수 예측 정확도가 점진적으로 향상됩니다.', '운영 목표: RESERVE_BUY 승률 30%↑ / 평균 D+1 수익 +1%↑', '현재: 백테스트 {total_records}건 분석 완료', '실전 데이터 누적 진행 중 → 6/29 Run #93 이후 본격 집계', '적중률 트래킹 설명')">
+       onclick="showInfoPopup('?뱢 ?꾩쟻 ?곸쨷瑜??몃옒???쒖뒪??, '留ㅼ씪 15:35 ?덊룷?몄뿉???꾩씪 TOP20 醫낅ぉ??D+1 ?ㅼ젣 ?섏씡瑜좎쓣 ?먮룞 吏묎퀎?⑸땲?? ???곗씠?곌? ?볦씠硫?BM(踰ㅼ튂留덊겕 紐⑤뱢) 媛以묒튂瑜??먮룞 議곗젙?섏뿬 ?먯닔 ?덉륫 ?뺥솗?꾧? ?먯쭊?곸쑝濡??μ긽?⑸땲??', '?댁쁺 紐⑺몴: RESERVE_BUY ?밸쪧 30%??/ ?됯퇏 D+1 ?섏씡 +1%??, '?꾩옱: 諛깊뀒?ㅽ듃 {total_records}嫄?遺꾩꽍 ?꾨즺', '?ㅼ쟾 ?곗씠???꾩쟻 吏꾪뻾 以???6/29 Run #93 ?댄썑 蹂멸꺽 吏묎퀎', '?곸쨷瑜??몃옒???ㅻ챸')">
     <div style="display:flex;justify-content:space-between;align-items:center">
-      <div style="font-size:12px;font-weight:500;color:#0F6E56">📈 누적 적중률 트래킹 — 운영 방침</div>
-      <span style="font-size:11px;color:#0F6E56">클릭 → 상세 ▶</span>
+      <div style="font-size:12px;font-weight:500;color:#0F6E56">?뱢 ?꾩쟻 ?곸쨷瑜??몃옒?????댁쁺 諛⑹묠</div>
+      <span style="font-size:11px;color:#0F6E56">?대┃ ???곸꽭 ??/span>
     </div>
     <div style="font-size:11px;color:#0F6E56;line-height:1.8;margin-top:6px">
-      • 매일 15:35 레포트에서 전일 TOP20의 D+1 실제 수익률 자동 집계<br>
-      • 주간 단위 승률 추이 → 점수 임계값 자동 조정 (BM 가중치 피드백)<br>
-      • 목표: RESERVE_BUY 승률 30% 이상 / 평균 D+1 수익 +1% 이상<br>
-      • 현재: <strong>백테스트 데이터 {total_records}건 분석 완료</strong> | 실전 누적 집계 진행 중
-    </div>
+      ??留ㅼ씪 15:35 ?덊룷?몄뿉???꾩씪 TOP20??D+1 ?ㅼ젣 ?섏씡瑜??먮룞 吏묎퀎<br>
+      ??二쇨컙 ?⑥쐞 ?밸쪧 異붿씠 ???먯닔 ?꾧퀎媛??먮룞 議곗젙 (BM 媛以묒튂 ?쇰뱶諛?<br>
+      ??紐⑺몴: RESERVE_BUY ?밸쪧 30% ?댁긽 / ?됯퇏 D+1 ?섏씡 +1% ?댁긽<br>
+      ???꾩옱: <strong>諛깊뀒?ㅽ듃 ?곗씠??{total_records}嫄?遺꾩꽍 ?꾨즺</strong> | ?ㅼ쟾 ?꾩쟻 吏묎퀎 吏꾪뻾 以?    </div>
   </div>
 
-  <!-- AI 자가진단 -->
+  <!-- AI ?먭?吏꾨떒 -->
   <div class="self-diag" style="margin-top:12px;cursor:pointer"
-       onclick="showInfoPopup('🤖 SFD AI 자가진단 메모', 'SFD(Smart Finance Dynamic)는 매 세션마다 미구현 항목과 개선 방향을 스스로 기록합니다. 이 메모는 다음 AI(Claude)가 세션을 이어받을 때 가장 먼저 읽는 인수인계 자료입니다.', '미구현 1순위: Reuters/AP RSS 직접 수집', '미구현 2순위: DART 공시 유형→영향 강도 매핑', '미구현 3순위: 차트프로 패턴 S3/S4 반영', 'AI 자가진단 시스템')">
+       onclick="showInfoPopup('?쨼 SFD AI ?먭?吏꾨떒 硫붾え', 'SFD(Smart Finance Dynamic)??留??몄뀡留덈떎 誘멸뎄????ぉ怨?媛쒖꽑 諛⑺뼢???ㅼ뒪濡?湲곕줉?⑸땲?? ??硫붾え???ㅼ쓬 AI(Claude)媛 ?몄뀡???댁뼱諛쏆쓣 ??媛??癒쇱? ?쎈뒗 ?몄닔?멸퀎 ?먮즺?낅땲??', '誘멸뎄??1?쒖쐞: Reuters/AP RSS 吏곸젒 ?섏쭛', '誘멸뎄??2?쒖쐞: DART 怨듭떆 ?좏삎?믪쁺??媛뺣룄 留ㅽ븨', '誘멸뎄??3?쒖쐞: 李⑦듃?꾨줈 ?⑦꽩 S3/S4 諛섏쁺', 'AI ?먭?吏꾨떒 ?쒖뒪??)">
     <div style="display:flex;justify-content:space-between;align-items:center">
-      <div class="subsec-label" style="margin-bottom:0">🤖 AI 자가진단 메모 (클릭 → 상세)</div>
-      <span style="font-size:11px;color:#534AB7">▶</span>
+      <div class="subsec-label" style="margin-bottom:0">?쨼 AI ?먭?吏꾨떒 硫붾え (?대┃ ???곸꽭)</div>
+      <span style="font-size:11px;color:#534AB7">??/span>
     </div>
-    <div class="diag-item" style="margin-top:8px">• 완료: 글로벌 레이더(S0) + 7섹션 레포트 + 클릭 팝업 + TOP20 + 적중률 모니터링</div>
-    <div class="diag-item">• 미구현 1순위: Reuters/AP RSS 직접 수집</div>
-    <div class="diag-item">• 미구현 2순위: DART 공시 유형→영향 강도 매핑</div>
-    <div class="diag-item">• 미구현 3순위: 차트프로 패턴 S3 반영 / 전일종가 연동</div>
-    <div class="diag-item">• 스케줄: 08:10 / 09:05 / 15:35 하루 3회 | 6/29 Run #93 후 TOP20 정상화</div>
+    <div class="diag-item" style="margin-top:8px">???꾨즺: 湲濡쒕쾶 ?덉씠??S0) + 7?뱀뀡 ?덊룷??+ ?대┃ ?앹뾽 + TOP20 + ?곸쨷瑜?紐⑤땲?곕쭅</div>
+    <div class="diag-item">??誘멸뎄??1?쒖쐞: Reuters/AP RSS 吏곸젒 ?섏쭛</div>
+    <div class="diag-item">??誘멸뎄??2?쒖쐞: DART 怨듭떆 ?좏삎?믪쁺??媛뺣룄 留ㅽ븨</div>
+    <div class="diag-item">??誘멸뎄??3?쒖쐞: 李⑦듃?꾨줈 ?⑦꽩 S3 諛섏쁺 / ?꾩씪醫낃? ?곕룞</div>
+    <div class="diag-item">???ㅼ?以? 08:10 / 09:05 / 15:35 ?섎（ 3??| 6/29 Run #93 ??TOP20 ?뺤긽??/div>
   </div>
   {recent_table_html}
 </section>"""
 
-# ── HTML 조합 ────────────────────────────────────────────────────
+# ?? HTML 議고빀 ????????????????????????????????????????????????????
 
 def build_html(data, trade_date):
     d   = data
@@ -1092,7 +1083,7 @@ def build_html(data, trade_date):
     now_str    = datetime.now().strftime("%Y-%m-%d %H:%M")
     import json as _json
 
-    # 배너/대시보드용 JSON
+    # 諛곕꼫/??쒕낫?쒖슜 JSON
     radar_slim = {
         "market": {
             "indices":    radar.get("market",{}).get("indices",{}),
@@ -1102,8 +1093,7 @@ def build_html(data, trade_date):
     }
     radar_json = _json.dumps(radar_slim, ensure_ascii=False)
 
-    # 업종상위: 뉴스 트리거에서 상위 3개
-    triggers = radar.get("sector_triggers", [])
+    # ?낆쥌?곸쐞: ?댁뒪 ?몃━嫄곗뿉???곸쐞 3媛?    triggers = radar.get("sector_triggers", [])
     sector_top_html = ""
     for i, t in enumerate(triggers[:5], 1):
         boost = t.get("boost", 0)
@@ -1111,14 +1101,14 @@ def build_html(data, trade_date):
         sign  = "+" if boost > 0 else ""
         sector_top_html += f"""
         <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:0.5px solid #f0f0ee;cursor:pointer"
-             onclick="showInfoPopup('{t.get('sector','')}','{t.get('headline','').replace("'","")}','{t.get('source','')}','{sign}{boost}pt boost','키워드: {t.get('keyword','')}','업종 트리거')">
+             onclick="showInfoPopup('{t.get('sector','')}','{t.get('headline','').replace("'","")}','{t.get('source','')}','{sign}{boost}pt boost','?ㅼ썙?? {t.get('keyword','')}','?낆쥌 ?몃━嫄?)">
           <span style="font-size:12px;font-weight:500">{t.get('sector','')}</span>
           <span style="font-size:12px;color:{color};font-weight:500">{sign}{boost}pt</span>
         </div>"""
     if not sector_top_html:
-        sector_top_html = '<div style="font-size:12px;color:#888;padding:8px 0">트리거 없음</div>'
+        sector_top_html = '<div style="font-size:12px;color:#888;padding:8px 0">?몃━嫄??놁쓬</div>'
 
-    # TOP5 미리보기
+    # TOP5 誘몃━蹂닿린
     top5_preview_html = ""
     for i, r in enumerate(d["top10"][:5], 1):
         score = r.get("total_score","")
@@ -1132,9 +1122,9 @@ def build_html(data, trade_date):
           <span style="font-size:12px;font-weight:500;color:{color}">{score}pt</span>
         </div>"""
     if not top5_preview_html:
-        top5_preview_html = '<div style="font-size:12px;color:#888;padding:8px 0">6/29 이후 정상화</div>'
+        top5_preview_html = '<div style="font-size:12px;color:#888;padding:8px 0">6/29 ?댄썑 ?뺤긽??/div>'
 
-    # 캘린더 미리보기
+    # 罹섎┛??誘몃━蹂닿린
     cal_alerts = radar.get("calendar_alerts", [])
     calendar_preview_html = ""
     for a in cal_alerts[:4]:
@@ -1147,14 +1137,14 @@ def build_html(data, trade_date):
           <span style="font-size:11px;flex:1;margin-left:6px">{a.get('name','')}</span>
         </div>"""
     if not calendar_preview_html:
-        calendar_preview_html = '<div style="font-size:12px;color:#888;padding:8px 0">이벤트 없음</div>'
+        calendar_preview_html = '<div style="font-size:12px;color:#888;padding:8px 0">?대깽???놁쓬</div>'
 
     return f"""<!DOCTYPE html>
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SFD 일일 레포트 {trade_date}</title>
+<title>SFD ?쇱씪 ?덊룷??{trade_date}</title>
 <style>
   :root {{
     --bg: #f8f8f6;
@@ -1353,7 +1343,7 @@ def build_html(data, trade_date):
 </head>
 <body>
 
-<!-- 공용 정보 팝업 (S0/S1/S2/S5용) -->
+<!-- 怨듭슜 ?뺣낫 ?앹뾽 (S0/S1/S2/S5?? -->
 <div id="info-popup-overlay" onclick="closeInfoPopup()"
   style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;
          background:rgba(0,0,0,0.5);z-index:999;overflow-y:auto;-webkit-overflow-scrolling:touch">
@@ -1362,17 +1352,17 @@ def build_html(data, trade_date):
            padding:24px;position:relative">
     <button onclick="closeInfoPopup()"
       style="position:absolute;top:14px;right:14px;background:none;border:none;
-             font-size:22px;cursor:pointer;color:#888;line-height:1">✕</button>
+             font-size:22px;cursor:pointer;color:#888;line-height:1">??/button>
     <div id="info-popup-content"></div>
   </div>
 </div>
 
 <script>
 function showInfoPopup(title, desc, tag, val1, val2, category) {{
-  const tagColor = category === '미래산업 모멘텀' ? '#534AB7' :
-                   category === '글로벌 선행' ? '#185FA5' :
-                   category.includes('트리거') ? '#e24b4a' :
-                   category.includes('긴급') ? '#A32D2D' : '#3B6D11';
+  const tagColor = category === '誘몃옒?곗뾽 紐⑤찘?' ? '#534AB7' :
+                   category === '湲濡쒕쾶 ?좏뻾' ? '#185FA5' :
+                   category.includes('?몃━嫄?) ? '#e24b4a' :
+                   category.includes('湲닿툒') ? '#A32D2D' : '#3B6D11';
   document.getElementById('info-popup-content').innerHTML = `
     <div style="margin-bottom:16px">
       <div style="font-size:11px;color:#888;background:#f0f0ee;padding:2px 8px;
@@ -1397,8 +1387,7 @@ document.addEventListener('keydown', function(e) {{
   if (e.key === 'Escape') {{ closePopup(); closeInfoPopup(); }}
 }});
 
-// 상단 배너 데이터 채우기
-(function() {{
+// ?곷떒 諛곕꼫 ?곗씠??梨꾩슦湲?(function() {{
   const rd = {radar_json};
   const m  = rd.market || {{}};
   const idx = m.indices || {{}};
@@ -1407,7 +1396,7 @@ document.addEventListener('keydown', function(e) {{
   function fmt(d) {{
     if (!d || d.price == null) return '--';
     const c = d.chg_pct >= 0 ? '#ff6b6b' : '#74b9ff';
-    const a = d.chg_pct >= 0 ? '▲' : '▼';
+    const a = d.chg_pct >= 0 ? '?? : '??;
     return `<span style="color:#fff;font-weight:500">${{d.label}}</span> <span style="color:#ccc">${{d.price.toLocaleString()}}</span> <span style="color:${{c}}">${{a}}${{Math.abs(d.chg_pct).toFixed(2)}}%</span>`;
   }}
   const el = (id, html) => {{ const e = document.getElementById(id); if(e) e.innerHTML = html; }};
@@ -1421,24 +1410,23 @@ document.addEventListener('keydown', function(e) {{
 
 <div class="header">
   <div>
-    <div class="header-title">📊 SFD — Smart Finance Dynamic</div>
+    <div class="header-title">?뱤 SFD ??Smart Finance Dynamic</div>
     <div class="header-sub">
-      {trade_date[:4]}.{trade_date[4:6]}.{trade_date[6:]} | 생성: {now_str} KST
-      | v3.9 BM-18 | 일일 시황 레포트
-    </div>
+      {trade_date[:4]}.{trade_date[4:6]}.{trade_date[6:]} | ?앹꽦: {now_str} KST
+      | v3.9 BM-18 | ?쇱씪 ?쒗솴 ?덊룷??    </div>
   </div>
   <nav class="nav">
-    <a href="#s0">📡온도계</a>
-    <a href="#s1">🇰🇷영향</a>
-    <a href="#s2">📅캘린더</a>
-    <a href="#s3">🚀TOP20</a>
-    <a href="#s5">🔭미래</a>
-    <a href="#s6">📊진단</a><a href="#s7">📊순위</a>
-    <a href="sfd_account_latest.html" style="margin-left:8px;background:#1e3a5f;border:1px solid #4a7abf;color:#90caf9;padding:5px 14px;border-radius:12px;text-decoration:none;font-size:12px;white-space:nowrap">💼 계좌분석 →</a>
+    <a href="#s0">?뱻?⑤룄怨?/a>
+    <a href="#s1">?눖?눟?곹뼢</a>
+    <a href="#s2">?뱟罹섎┛??/a>
+    <a href="#s3">??TOP20</a>
+    <a href="#s5">?뵯誘몃옒</a>
+    <a href="#s6">?뱤吏꾨떒</a><a href="#s7">?뱤?쒖쐞</a>
+    <a href="sfd_account_latest.html" style="margin-left:8px;background:#1e3a5f;border:1px solid #4a7abf;color:#90caf9;padding:5px 14px;border-radius:12px;text-decoration:none;font-size:12px;white-space:nowrap">?뮳 怨꾩쥖遺꾩꽍 ??/a>
   </nav>
 </div>
 
-<!-- 상단 요약 배너 -->
+<!-- ?곷떒 ?붿빟 諛곕꼫 -->
 <div id="summary-banner" style="background:#1a1a2e;color:#fff;padding:8px 24px;font-size:12px;
      display:flex;gap:24px;overflow-x:auto;white-space:nowrap;border-bottom:1px solid #333">
   <span id="banner-kospi">KOSPI --</span>
@@ -1451,23 +1439,23 @@ document.addEventListener('keydown', function(e) {{
 
 <div class="container">
 
-<!-- ── 네이버 증권 스타일 대시보드 ─────────────────────────────── -->
+<!-- ?? ?ㅼ씠踰?利앷텒 ?ㅽ?????쒕낫????????????????????????????????? -->
 <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px" id="dashboard-grid">
 
-  <!-- 오늘의 증시 -->
+  <!-- ?ㅻ뒛??利앹떆 -->
   <div class="section" style="padding:14px">
-    <div class="subsec-label" style="margin-bottom:8px">오늘의 증시</div>
+    <div class="subsec-label" style="margin-bottom:8px">?ㅻ뒛??利앹떆</div>
     <div id="db-market-rows">
       <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:0.5px solid #f0f0ee">
-        <span style="font-size:12px;font-weight:500">코스피</span>
+        <span style="font-size:12px;font-weight:500">肄붿뒪??/span>
         <span id="db-kospi" style="font-size:12px">--</span>
       </div>
       <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:0.5px solid #f0f0ee">
-        <span style="font-size:12px;font-weight:500">코스닥</span>
+        <span style="font-size:12px;font-weight:500">肄붿뒪??/span>
         <span id="db-kosdaq" style="font-size:12px">--</span>
       </div>
       <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:0.5px solid #f0f0ee">
-        <span style="font-size:12px;color:#888">나스닥</span>
+        <span style="font-size:12px;color:#888">?섏뒪??/span>
         <span id="db-nasdaq" style="font-size:12px">--</span>
       </div>
       <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:0.5px solid #f0f0ee">
@@ -1475,65 +1463,65 @@ document.addEventListener('keydown', function(e) {{
         <span id="db-sp500" style="font-size:12px">--</span>
       </div>
       <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:0.5px solid #f0f0ee">
-        <span style="font-size:12px;color:#888">닛케이</span>
+        <span style="font-size:12px;color:#888">?쏆???/span>
         <span id="db-nikkei" style="font-size:12px">--</span>
       </div>
       <div style="display:flex;justify-content:space-between;padding:5px 0">
-        <span style="font-size:12px;color:#888">상하이</span>
+        <span style="font-size:12px;color:#888">?곹븯??/span>
         <span id="db-shanghai" style="font-size:12px">--</span>
       </div>
     </div>
   </div>
 
-  <!-- 외국인/기관/개인 수급 -->
+  <!-- ?멸뎅??湲곌?/媛쒖씤 ?섍툒 -->
   <div class="section" style="padding:14px">
-    <div class="subsec-label" style="margin-bottom:8px">수급 동향 (코스피 당일)</div>
+    <div class="subsec-label" style="margin-bottom:8px">?섍툒 ?숉뼢 (肄붿뒪???뱀씪)</div>
     <div id="db-supply-rows">
       <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:0.5px solid #f0f0ee">
-        <span style="font-size:12px;font-weight:500">🌍 외국인</span>
+        <span style="font-size:12px;font-weight:500">?뙇 ?멸뎅??/span>
         <div style="text-align:right">
-          <span id="db-foreign" style="font-size:13px;font-weight:500">집계중</span><br>
-          <span style="font-size:10px;color:#888">순매수(억원)</span>
+          <span id="db-foreign" style="font-size:13px;font-weight:500">吏묎퀎以?/span><br>
+          <span style="font-size:10px;color:#888">?쒕ℓ???듭썝)</span>
         </div>
       </div>
       <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:0.5px solid #f0f0ee">
-        <span style="font-size:12px;font-weight:500">🏦 기관</span>
+        <span style="font-size:12px;font-weight:500">?룱 湲곌?</span>
         <div style="text-align:right">
-          <span id="db-institution" style="font-size:13px;font-weight:500">집계중</span><br>
-          <span style="font-size:10px;color:#888">순매수(억원)</span>
+          <span id="db-institution" style="font-size:13px;font-weight:500">吏묎퀎以?/span><br>
+          <span style="font-size:10px;color:#888">?쒕ℓ???듭썝)</span>
         </div>
       </div>
       <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0">
-        <span style="font-size:12px;font-weight:500">👤 개인</span>
+        <span style="font-size:12px;font-weight:500">?뫀 媛쒖씤</span>
         <div style="text-align:right">
-          <span id="db-individual" style="font-size:13px;font-weight:500">집계중</span><br>
-          <span style="font-size:10px;color:#888">순매수(억원)</span>
+          <span id="db-individual" style="font-size:13px;font-weight:500">吏묎퀎以?/span><br>
+          <span style="font-size:10px;color:#888">?쒕ℓ???듭썝)</span>
         </div>
       </div>
     </div>
     <div style="font-size:10px;color:#888;margin-top:6px;background:#f8f8f6;padding:5px 8px;border-radius:6px">
-      💡 외국인 100조 순매도 추세 지속 중 (2026.01~) → 수급 악화 주의
+      ?뮕 ?멸뎅??100議??쒕ℓ??異붿꽭 吏??以?(2026.01~) ???섍툒 ?낇솕 二쇱쓽
     </div>
   </div>
 
-  <!-- 환율 + 원자재 요약 -->
+  <!-- ?섏쑉 + ?먯옄???붿빟 -->
   <div class="section" style="padding:14px">
-    <div class="subsec-label" style="margin-bottom:8px">환율 & 원자재</div>
+    <div class="subsec-label" style="margin-bottom:8px">?섏쑉 & ?먯옄??/div>
     <div>
       <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:0.5px solid #f0f0ee">
-        <span style="font-size:12px;font-weight:500">달러/원</span>
+        <span style="font-size:12px;font-weight:500">?щ윭/??/span>
         <span id="db-usdkrw" style="font-size:12px">--</span>
       </div>
       <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:0.5px solid #f0f0ee">
-        <span style="font-size:12px;color:#888">달러/엔</span>
+        <span style="font-size:12px;color:#888">?щ윭/??/span>
         <span id="db-usdjpy" style="font-size:12px">--</span>
       </div>
       <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:0.5px solid #f0f0ee">
-        <span style="font-size:12px;color:#888">금($/oz)</span>
+        <span style="font-size:12px;color:#888">湲?$/oz)</span>
         <span id="db-gold" style="font-size:12px">--</span>
       </div>
       <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:0.5px solid #f0f0ee">
-        <span style="font-size:12px;color:#888">WTI유가</span>
+        <span style="font-size:12px;color:#888">WTI?좉?</span>
         <span id="db-oil" style="font-size:12px">--</span>
       </div>
       <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:0.5px solid #f0f0ee">
@@ -1548,28 +1536,28 @@ document.addEventListener('keydown', function(e) {{
   </div>
 </div>
 
-<!-- 업종상위 + 테마상위 + 인기검색 -->
+<!-- ?낆쥌?곸쐞 + ?뚮쭏?곸쐞 + ?멸린寃??-->
 <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px">
 
-  <!-- 업종상위 (SFD 트리거 기반) -->
+  <!-- ?낆쥌?곸쐞 (SFD ?몃━嫄?湲곕컲) -->
   <div class="section" style="padding:14px">
-    <div class="subsec-label" style="margin-bottom:8px">📈 업종상위 (뉴스 트리거)</div>
+    <div class="subsec-label" style="margin-bottom:8px">?뱢 ?낆쥌?곸쐞 (?댁뒪 ?몃━嫄?</div>
     <div id="db-sector-top">
       {sector_top_html}
     </div>
   </div>
 
-  <!-- SFD 급등 후보 미리보기 -->
+  <!-- SFD 湲됰벑 ?꾨낫 誘몃━蹂닿린 -->
   <div class="section" style="padding:14px">
-    <div class="subsec-label" style="margin-bottom:8px">🚀 SFD TOP5 미리보기</div>
+    <div class="subsec-label" style="margin-bottom:8px">?? SFD TOP5 誘몃━蹂닿린</div>
     <div id="db-top5">
       {top5_preview_html}
     </div>
   </div>
 
-  <!-- 캘린더 경보 미리보기 -->
+  <!-- 罹섎┛??寃쎈낫 誘몃━蹂닿린 -->
   <div class="section" style="padding:14px">
-    <div class="subsec-label" style="margin-bottom:8px">📅 임박 이벤트</div>
+    <div class="subsec-label" style="margin-bottom:8px">?뱟 ?꾨컯 ?대깽??/div>
     <div id="db-calendar-preview">
       {calendar_preview_html}
     </div>
@@ -1578,8 +1566,7 @@ document.addEventListener('keydown', function(e) {{
 </div>
 
 <script>
-// 대시보드 시장 데이터 채우기
-(function() {{
+// ??쒕낫???쒖옣 ?곗씠??梨꾩슦湲?(function() {{
   const rd  = {radar_json};
   const idx = (rd.market||{{}}).indices    || {{}};
   const fx  = (rd.market||{{}}).fx_rates   || {{}};
@@ -1588,7 +1575,7 @@ document.addEventListener('keydown', function(e) {{
   function priceFmt(d) {{
     if (!d || d.price == null) return '<span style="color:#888">--</span>';
     const c = (d.chg_pct||0) >= 0 ? '#e24b4a' : '#378ADD';
-    const a = (d.chg_pct||0) >= 0 ? '▲' : '▼';
+    const a = (d.chg_pct||0) >= 0 ? '?? : '??;
     return `<span style="color:#333;font-weight:500">${{Number(d.price).toLocaleString()}}</span> <span style="color:${{c}};font-size:11px">${{a}}${{Math.abs(d.chg_pct||0).toFixed(2)}}%</span>`;
   }}
 
@@ -1606,11 +1593,10 @@ document.addEventListener('keydown', function(e) {{
   set('db-btc',      priceFmt(com.BTC));
   set('db-vix2',     priceFmt(com.VIX));
 
-  // 배너도 채우기
-  function bannerFmt(d) {{
+  // 諛곕꼫??梨꾩슦湲?  function bannerFmt(d) {{
     if (!d || d.price==null) return '--';
     const c=(d.chg_pct||0)>=0?'#ff6b6b':'#74b9ff';
-    const a=(d.chg_pct||0)>=0?'▲':'▼';
+    const a=(d.chg_pct||0)>=0?'??:'??;
     return `<span style="color:#fff;font-weight:500">${{d.label}}</span> <span style="color:#ccc">${{Number(d.price).toLocaleString()}}</span> <span style="color:${{c}}">${{a}}${{Math.abs(d.chg_pct||0).toFixed(2)}}%</span>`;
   }}
   const bset=(id,h)=>{{const e=document.getElementById(id);if(e)e.innerHTML=h;}};
@@ -1622,7 +1608,7 @@ document.addEventListener('keydown', function(e) {{
 }})();
 </script>
 
-<!-- 본문 섹션 -->
+<!-- 蹂몃Ц ?뱀뀡 -->
   {s0}
   {s1}
   {s2}
@@ -1632,24 +1618,24 @@ document.addEventListener('keydown', function(e) {{
 </div>
 
 <div class="footer">
-  SFD v3.9 | BM-18 적용 | Claude Sonnet 4.6 | 본 레포트는 투자 참고용이며 최종 판단은 본인 책임입니다.
+  SFD v3.9 | BM-18 ?곸슜 | Claude Sonnet 4.6 | 蹂??덊룷?몃뒗 ?ъ옄 李멸퀬?⑹씠硫?理쒖쥌 ?먮떒? 蹂몄씤 梨낆엫?낅땲??
 </div>
 
-<!-- 모바일 하단 네비게이션 -->
+<!-- 紐⑤컮???섎떒 ?ㅻ퉬寃뚯씠??-->
 <nav class="mobile-nav">
-  <a href="#s0"><span>📡</span>온도계</a>
-  <a href="#s1"><span>🇰🇷</span>영향</a>
-  <a href="#s2"><span>📅</span>캘린더</a>
-  <a href="#s3"><span>🚀</span>TOP10</a>
-  <a href="#s5"><span>🔭</span>미래</a>
-  <a href="#s6"><span>📊</span>진단</a>
-            <a href="#s7"><span>📊</span>순위</a>
+  <a href="#s0"><span>?뱻</span>?⑤룄怨?/a>
+  <a href="#s1"><span>?눖?눟</span>?곹뼢</a>
+  <a href="#s2"><span>?뱟</span>罹섎┛??/a>
+  <a href="#s3"><span>??</span>TOP10</a>
+  <a href="#s5"><span>?뵯</span>誘몃옒</a>
+  <a href="#s6"><span>?뱤</span>吏꾨떒</a>
+            <a href="#s7"><span>?뱤</span>?쒖쐞</a>
 </nav>
 {_build_s7_section()}
 </body>
 </html>"""
 
-# ── 메인 ─────────────────────────────────────────────────────────
+# ?? 硫붿씤 ?????????????????????????????????????????????????????????
 
 def main():
     today = datetime.now()
@@ -1659,19 +1645,19 @@ def main():
     data = prepare_data()
     html = build_html(data, trade_date)
 
-    # 저장
-    out_path = os.path.join(REPORT_DIR, f"sfd_report_{trade_date}.html")
+    # ???    out_path = os.path.join(REPORT_DIR, f"sfd_report_{trade_date}.html")
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)
 
-    # latest 복사
+    # latest 蹂듭궗
     latest_path = os.path.join(OUTPUT_DIR, "sfd_report_latest.html")
     with open(latest_path, "w", encoding="utf-8") as f:
         f.write(html)
 
-    logger.info(f"✓ 레포트 저장: {out_path}")
-    logger.info(f"✓ latest 복사: {latest_path}")
+    logger.info(f"???덊룷????? {out_path}")
+    logger.info(f"??latest 蹂듭궗: {latest_path}")
     logger.info(f"=== sfd_daily_report DONE ===")
 
 if __name__ == "__main__":
     main()
+
