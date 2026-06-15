@@ -99,6 +99,10 @@ jobs:
         run: python tools/sfd_oscillation_analyzer.py
         continue-on-error: true
 
+      - name: Layer 2.9 -- trend_filter
+        run: python tools/sfd_trend_filter.py
+        continue-on-error: true
+
       # ============================================================
       # PASS 1: aggregator (fund=0) -> generates master_signal
       #         so that fundamental_watch can read top-200 tickers
@@ -145,6 +149,10 @@ jobs:
 
       - name: Layer 5 -- portfolio_monitor
         run: python tools/sfd_portfolio_monitor.py
+        continue-on-error: true
+
+      - name: Layer 5.1 -- profit_manager
+        run: python tools/sfd_profit_manager.py
         continue-on-error: true
 
       - name: Layer 5.2 -- add_buy_v2
