@@ -1,13 +1,9 @@
-﻿name: SFD Daily Pipeline
+name: SFD Daily Pipeline
 # sfd-pipeline/.github/workflows/sfd_daily.yml
-# V10.2 | 2026-06-05 | Claude Sonnet 4.6
+# V10.5 | 2026-06-15 | Claude Sonnet 4.6
 #
-# [V10.1 -> V10.2 changes]
-# - 2-pass aggregator structure:
-#   Pass1: aggregator (fund=0, generates master_signal for fundamental_watch input)
-#   Pass2: fundamental_watch + investor_flow_fetch (uses master_signal top-200)
-#   Pass3: aggregator re-run (final signal with fund_score + investor_score)
-# - This fixes fund_score=0 and investor_score=0 permanently
+# [V10.2 -> V10.5 changes]
+# - Layer 5.2: sfd_add_buy_v2.py 추가 (조정 매집 신호)
 
 on:
   schedule:
@@ -34,6 +30,7 @@ jobs:
       DART_API_KEY: ${{ secrets.DART_API_KEY }}
       NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
       NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       SFD_BASE_DIR: /tmp/sfd
 
     steps:
@@ -148,6 +145,10 @@ jobs:
 
       - name: Layer 5 -- portfolio_monitor
         run: python tools/sfd_portfolio_monitor.py
+        continue-on-error: true
+
+      - name: Layer 5.2 -- add_buy_v2
+        run: python tools/sfd_add_buy_v2.py
         continue-on-error: true
 
       - name: Layer 5.5 -- trade_guardian
