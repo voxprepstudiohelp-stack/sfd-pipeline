@@ -1,44 +1,40 @@
 """
-sfd_kis_trader.py — KIS 자동매매 모듈 v0.4
+sfd_kis_trader.py — KIS 자동매매 모듈 v0.5
 =============================================================
 계좌: 실전투자계좌 44626570 | 만료: 2027.05.25
 인터페이스: KIS OpenAPI REST
 
 레이어 구조:
- [Layer 7] sfd_kis_trader.py
- [Layer 6] sfd_trade_guardian.py ← 9개 알림코드
- [Layer 5] sfd_master_signal_latest.csv ← RESERVE_BUY 후보 (decay 내장)
- [Layer 4] sfd_signal_aggregator
+  [Layer 7] sfd_kis_trader.py
+  [Layer 6] sfd_trade_guardian.py ← 9개 알림코드
+  [Layer 5] sfd_master_signal_latest.csv ← RESERVE_BUY 후보 (decay 내장)
+  [Layer 4] sfd_signal_aggregator
 
 거미줄 분할매수 (Spider-Web):
- Grade A (고신뢰): 캐시의 12% / 3분할 매수
- Grade B (중신뢰): 캐시의 6% / 2분할 매수
- Grade C (보통): 캐시의 2.5% / 1분할 매수
+  Grade A (고신뢰): 캐시의 12% / 3분할 매수
+  Grade B (중신뢰): 캐시의 6% / 2분할 매수
+  Grade C (보통): 캐시의 2.5% / 1분할 매수
 
- 1차 매수: 현재가 × 1.003
- 2차 매수: −3%
- 3차 매수: −6%
- 손절: −8%
- 익절: +15%
+  1차 매수: 현재가 × 1.003
+  2차 매수: −3%
+  3차 매수: −6%
+  손절: −8%
+  익절: +15%
 
 BLOCK 조건:
- - signal != RESERVE_BUY
- - total_score < 90
- - decay_flag == "STALE"
- - macro_score < −10pt
- - [C1] 기존 보유 종목 (portfolio.json / KIS 잔고)
- - [C2] 동일종목 당일 2회 이상 주문 (order_log.csv)
- - [M1] 계좌 당일손실 −3% 이하
+  - signal != RESERVE_BUY
+  - total_score < 90
+  - decay_flag == "STALE"
+  - macro_score < −10pt
+  - [C1] 기존 보유 종목 (portfolio.json / KIS 잔고)
+  - [C2] 동일종목 당일 2회 이상 주문 (order_log.csv)
+  - [M1] 계좌 당일손실 −3% 이하
 
-v0.3 → v0.4 변경사항 (P6):
- - [P6] _get_account_daily_pnl(): portfolio.json 정적 계산 제거
-   → KIS API TTTC8434R 잔고조회 output2 실시간 연동
-   → 필드: tot_evlu_amt(총평가금액) / pchs_amt_smtl_inqr(매입금액합계)
-   → daily_pnl_rate = (tot_evlu_amt - pchs_amt_smtl_inqr) / pchs_amt_smtl_inqr
-   → API 실패 시 portfolio.json fallback (graceful degradation)
- - [P6] KISPortfolio.get_daily_pnl_rate(): 신규 메서드 추가
- - [P6] dry_run 시 simulated cash도 KIS API 실잔고 우선 시도
- - get_cash() → get_balance_summary() 통합: cash + pnl_rate 1콜로 처리
+v0.4 → v0.5 변경사항:
+  - [거미줄 보수전략] _calc_qty(): SFD_QTY_FIXED_ONE 환경변수 추가
+    → true(기본값): 1주 고정 (자본여력 보수 전략)
+    → false: 기존 Grade 비중 방식 (A=12%/B=6%/C=2.5%)
+    → .env 또는 GitHub Secrets에서 제어 가능
 """
 
 import os
@@ -166,17 +162,16 @@ class KISPortfolio:
           evlu_pfls_smtl_amt : 평가손익 합계
 
         daily_pnl_rate 계산:
-          = (tot_evlu_amt - pchs_amt_smtl_inqr - dnca_tot_amt) / pchs_amt_smtl_inqr
+          = evlu_pfls_smtl_amt / pchs_amt_smtl_inqr
           → 주식 평가금액 기준 수익률 (예수금 제외)
-          → pchs_amt = 0 이면 None 반환
+          → pchs_amt = 0 이면 0.0 반환
         """
         result = {"cash": 0, "daily_pnl_rate": None, "source": "KIS_API"}
         try:
             data = self.get_balance()
             o2 = data.get("output2", [{}])[0]
 
-            cash = int(o2.get("dnca_tot_amt", 0) or 0)
-            tot_evlu = float(o2.get("tot_evlu_amt", 0) or 0)
+            cash     = int(o2.get("dnca_tot_amt", 0) or 0)
             pchs_amt = float(o2.get("pchs_amt_smtl_inqr", 0) or 0)
             evlu_pfls = float(o2.get("evlu_pfls_smtl_amt", 0) or 0)
 
@@ -184,7 +179,6 @@ class KISPortfolio:
 
             # ★ P6 핵심: 실시간 daily_pnl_rate
             if pchs_amt > 0:
-                # 주식 평가손익률 = 평가손익합계 / 매입금액합계
                 result["daily_pnl_rate"] = evlu_pfls / pchs_amt
             else:
                 result["daily_pnl_rate"] = 0.0  # 주식 미보유
@@ -267,11 +261,11 @@ class KISOrder:
 
     def _log_order(self, code, order_type, qty, price, result):
         log = {
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "timestamp":  datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "stock_code": code, "order_type": order_type,
             "qty": qty, "price": price,
             "rt_cd": result.get("rt_cd", "?"),
-            "msg": result.get("msg1", ""),
+            "msg":   result.get("msg1", ""),
         }
         df = pd.DataFrame([log])
         if ORDER_LOG.exists():
@@ -305,13 +299,13 @@ class SFDTrader:
         return holdings
 
     def _load_today_orders(self) -> set:
-        today_str = date.today().strftime("%Y-%m-%d")
+        today_str  = date.today().strftime("%Y-%m-%d")
         today_codes = set()
         if ORDER_LOG.exists():
             try:
                 log_df = pd.read_csv(ORDER_LOG, dtype=str)
                 if "timestamp" in log_df.columns and "stock_code" in log_df.columns:
-                    today_df = log_df[log_df["timestamp"].str.startswith(today_str)]
+                    today_df    = log_df[log_df["timestamp"].str.startswith(today_str)]
                     today_codes = set(today_df["stock_code"].dropna().unique())
             except Exception as e:
                 print(f"  [WARN] order_log.csv 파싱 실패: {e}")
@@ -350,16 +344,29 @@ class SFDTrader:
         return False, "OK"
 
     def _calc_qty(self, price: int, grade: str, cash: int, split: int = 1) -> int:
-        ratio = {"A": 0.12, "B": 0.06, "C": 0.025}.get(grade, 0.03)
+        """
+        매수 수량 계산
+        [v0.5] SFD_QTY_FIXED_ONE 환경변수로 전략 전환:
+          - true (기본값): 1주 고정 — 거미줄 매매 자본여력 보수 전략
+          - false         : Grade 비중 방식 (A=12%/B=6%/C=2.5%)
+        .env 또는 GitHub Secrets에서 SFD_QTY_FIXED_ONE=false 로 전환 가능
+        """
+        fixed_one = os.environ.get("SFD_QTY_FIXED_ONE", "true").lower() == "true"
+        if fixed_one:
+            return 1
+
+        ratio  = {"A": 0.12, "B": 0.06, "C": 0.025}.get(grade, 0.03)
         budget = int(cash * ratio / split)
-        qty = budget // price if price > 0 else 0
+        qty    = budget // price if price > 0 else 0
         return max(1, qty)
 
     def run(self, dry_run: bool = True):
         mode_label = "DRY-RUN" if dry_run else "LIVE"
-        print(f"\n[SFDTrader v0.4] {mode_label} | {datetime.now():%Y-%m-%d %H:%M:%S}")
+        print(f"\n[SFDTrader v0.5] {mode_label} | {datetime.now():%Y-%m-%d %H:%M:%S}")
         print(f"  SIGNAL_OUTPUT : {SIGNAL_OUTPUT}")
         print(f"  PORTFOLIO_JSON: {PORTFOLIO_JSON}")
+        qty_mode = "1주고정" if os.environ.get("SFD_QTY_FIXED_ONE", "true").lower() == "true" else "Grade비중"
+        print(f"  QTY_MODE      : {qty_mode} (SFD_QTY_FIXED_ONE={os.environ.get('SFD_QTY_FIXED_ONE','true')})")
         print("-" * 65)
 
         # ── [P6] KIS API 실시간 잔고 + PnL (1콜)
@@ -370,14 +377,14 @@ class SFDTrader:
         if pnl is not None:
             print(f"  Daily PnL: {pnl*100:+.2f}% [{source}]", end="")
             if pnl <= DAILY_LOSS_HALT:
-                print(f"  HALT (<={DAILY_LOSS_HALT*100:.0f}%)")
+                print(f" HALT (<={DAILY_LOSS_HALT*100:.0f}%)")
                 if not dry_run:
                     print("[SFDTrader] HALT: 당일 손실 한도 초과 — 주문 중단")
                     return
                 else:
-                    print("  [DRY-RUN] HALT 조건 해당 — 실거래 시 주문 중단됨 (시뮬레이션 계속)")
+                    print(" [DRY-RUN] HALT 조건 해당 — 실거래 시 주문 중단됨 (시뮬레이션 계속)")
             else:
-                print("  OK")
+                print(" OK")
         else:
             print("  Daily PnL: N/A")
 
@@ -406,10 +413,10 @@ class SFDTrader:
         # ── [P6] dry_run도 실잔고 우선 사용 (시뮬레이션 정확도 향상)
         if dry_run:
             kis_cash = balance_summary.get("cash", 0)
-            cash = kis_cash if kis_cash > 0 else 50_000_000
-            cash_label = f"(KIS실잔고)" if kis_cash > 0 else "(simulated)"
+            cash       = kis_cash if kis_cash > 0 else 50_000_000
+            cash_label = "(KIS실잔고)" if kis_cash > 0 else "(simulated)"
         else:
-            cash = balance_summary["cash"]
+            cash       = balance_summary["cash"]
             cash_label = "(actual)"
 
         print(f"  Total signals : {len(df)}")
@@ -449,7 +456,7 @@ class SFDTrader:
                 time.sleep(0.3)
 
         print("-" * 65)
-        print(f"[SFDTrader v0.4] Done | orders={'SIMULATED' if dry_run else 'EXECUTED'} x{order_count}")
+        print(f"[SFDTrader v0.5] Done | orders={'SIMULATED' if dry_run else 'EXECUTED'} x{order_count}")
 
 
 if __name__ == "__main__":
