@@ -1,3 +1,6 @@
+import sys
+import io
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 # -*- coding: utf-8 -*-
 """
 sfd_alpha_decay.py

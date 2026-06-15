@@ -69,16 +69,16 @@ def archive_today_signal(today: date) -> None:
     if SIGNAL_FILE.exists():
         dest_signal = archive_dir / "sfd_signal.csv"
         shutil.copy2(SIGNAL_FILE, dest_signal)
-        print(f"[Layer3] 오늘 신호 아카이빙: {dest_signal}")
+        print(f"[Layer3] Today's signal archived: {dest_signal}")
     else:
-        print(f"[Layer3] WARN: {SIGNAL_FILE} 없음 — signal 아카이빙 스킵")
+        print(f"[Layer3] WARN: {SIGNAL_FILE} not found — signal archiving skip")
 
     if PREV_CLOSE_FILE.exists():
         dest_close = archive_dir / "sfd_prev_close.csv"
         shutil.copy2(PREV_CLOSE_FILE, dest_close)
-        print(f"[Layer3] 오늘 종가 아카이빙: {dest_close}")
+        print(f"[Layer3] Today's close archived: {dest_close}")
     else:
-        print(f"[Layer3] WARN: {PREV_CLOSE_FILE} 없음 — prev_close 아카이빙 스킵")
+        print(f"[Layer3] WARN: {PREV_CLOSE_FILE} not found — prev_close archiving skip")
 
 
 def find_yesterday_archive(today: date):
@@ -87,11 +87,11 @@ def find_yesterday_archive(today: date):
         signal_path = _ARCHIVE / candidate.strftime("%Y%m%d") / "sfd_signal.csv"   # v1.3 수정
         close_path  = _ARCHIVE / candidate.strftime("%Y%m%d") / "sfd_prev_close.csv"  # v1.3 수정
         if signal_path.exists():
-            print(f"[Layer3] 어제 신호 발견: {signal_path}")
+            print(f"[Layer3] Yesterday's signal found: {signal_path}")
             if close_path.exists():
-                print(f"[Layer3] 어제 종가 발견: {close_path}")
+                print(f"[Layer3] Yesterday's close found: {close_path}")
             else:
-                print(f"[Layer3] WARN: 어제 prev_close 없음 — return_d1=None 유지")
+                print(f"[Layer3] WARN: Yesterday's prev_close not found — return_d1=None kept")
             return signal_path, close_path if close_path.exists() else None
     return None, None
 
@@ -137,7 +137,7 @@ def calc_return_d1(prev_signal, entry_close, exit_close) -> pd.DataFrame:
         merged["return_d1"]   = None
         merged["win_flag"]    = None
         merged["matched"]     = merged["close_exit"].notna()
-        print("[Layer3] WARN: close_entry 없음 — return_d1=None (GRACEFUL)")
+        print("[Layer3] WARN: close_entry not found — return_d1=None (GRACEFUL)")
     else:
         merged = merged.merge(entry_close, on="ticker", how="left")
         merged["matched"] = merged["close_exit"].notna() & merged["close_entry"].notna()
@@ -185,13 +185,13 @@ def summarize(df: pd.DataFrame) -> dict:
 
 def run() -> int:
     today = get_today()
-    print(f"[Layer3] sfd_backtest_d1 v1.3 시작 | as_of={today}")
+    print(f"[Layer3] sfd_backtest_d1 v1.3 START | as_of={today}")
 
     archive_today_signal(today)
 
     yesterday_signal_path, yesterday_close_path = find_yesterday_archive(today)
     if yesterday_signal_path is None:
-        print("[Layer3] SKIP: 어제 signal archive 없음 (신규 배포 첫날 또는 주말/공휴일)")
+        print("[Layer3] SKIP: Yesterday's signal archive not found (first deploy day or weekend/holiday)")
         return 0
 
     if not PREV_CLOSE_FILE.exists():
@@ -204,12 +204,12 @@ def run() -> int:
         entry_close = load_close(yesterday_close_path, col_alias="close_entry") \
                       if yesterday_close_path else None
     except Exception as e:
-        print(f"[Layer3] ERROR 데이터 로드 실패: {e}", file=sys.stderr)
+        print(f"[Layer3] ERROR data load failed: {e}", file=sys.stderr)
         return 1
 
-    print(f"[Layer3] 어제 신호: {len(prev_signal)}건 | 오늘 종가: {len(exit_close)}건")
+    print(f"[Layer3] Yesterday's signals: {len(prev_signal)} | Today's close: {len(exit_close)}")
     if entry_close is not None:
-        print(f"[Layer3] 어제 종가(entry): {len(entry_close)}건 → return_d1 계산 활성화")
+        print(f"[Layer3] Yesterday's close(entry): {len(entry_close)} → return_d1 calculation enabled")
 
     result  = calc_return_d1(prev_signal, entry_close, exit_close)
     summary = summarize(result)
@@ -218,10 +218,10 @@ def run() -> int:
     result.to_csv(BACKTEST_OUT, index=False, encoding="utf-8-sig")
     SUMMARY_OUT.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    print(f"[Layer3] 검증 완료")
-    print(f"  - 어제 신호: {summary['total_signals']}건")
-    print(f"  - 종가 매칭: {summary['matched_count']}건")
-    print(f"  - return_d1 활성화: {summary['return_d1_available']}")
+    print(f"[Layer3] Verification DONE")
+    print(f"  - Yesterday's signals: {summary['total_signals']}")
+    print(f"  - Close matched: {summary['matched_count']}")
+    print(f"  - return_d1 enabled: {summary['return_d1_available']}")
     for tier, stat in summary["tiers"].items():
         ret_str = f"{stat['avg_return_d1']:+.2f}%" if stat['avg_return_d1'] is not None else "N/A"
         win_str = f"{stat['win_rate_d1']:.1f}%"   if stat['win_rate_d1']  is not None else "N/A"

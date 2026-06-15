@@ -1,3 +1,6 @@
+import sys
+import io
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -30,10 +33,16 @@ Author:  Claude Sonnet 4.6 (2026-06-07)
 
 import argparse
 import os
+import pathlib
 import sys
 import time
 from datetime import date
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+_ENV = pathlib.Path(__file__).resolve().parent.parent / ".env"
+load_dotenv(_ENV, override=True)
 
 _HERE = Path(__file__).resolve().parent
 _BASE = os.environ.get("SFD_BASE_DIR", str(_HERE.parent))
@@ -139,13 +148,13 @@ def print_report(rows: list):
     print(f"  {'Ticker':<8} {'Bid':>10} {'Ask':>10} {'Ratio':>7} {'Score':>6}")
     print("  " + "-"*50)
     for r in sorted(rows, key=lambda x: x["hoga_score"], reverse=True):
-        mark = "🔥" if r["hoga_score"] >= 3 else ("⬇️" if r["hoga_score"] <= -2 else "  ")
+        mark = "[HOT]" if r["hoga_score"] >= 3 else ("[DN]" if r["hoga_score"] <= -2 else "  ")
         print(f"  {r['ticker']:<8} {r['total_bid']:>10,} {r['total_ask']:>10,} "
               f"{r['hoga_ratio']:>7.3f} {r['hoga_score']:>+6}  {mark}")
     print("="*60)
     pos = sum(1 for r in rows if r["hoga_score"] > 0)
     neg = sum(1 for r in rows if r["hoga_score"] < 0)
-    print(f"\n  매수우위: {pos}종목 | 매도우위: {neg}종목 | 중립: {len(rows)-pos-neg}종목\n")
+    print(f"\n  Buy-side: {pos} tickers | Sell-side: {neg} tickers | Neutral: {len(rows)-pos-neg} tickers\n")
 
 
 def run(mock: bool = False, top: int = 0):

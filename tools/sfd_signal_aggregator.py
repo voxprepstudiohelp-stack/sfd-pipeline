@@ -1,6 +1,12 @@
 # -*- coding: utf-8 -*-
-# sfd_signal_aggregator.py | v3.8 | Claude (Anthropic) 2026-06-05
+# sfd_signal_aggregator.py | v3.9 | Claude (Anthropic) 2026-06-12
 # Deploy to: sfd-pipeline/tools/sfd_signal_aggregator.py
+#
+# [v3.8 -> v3.9 changes]
+# - [BM-19] score_investor(): 외국인+기관+연기금 3주체 동시 순매수 보너스 +15pt
+#   -> investor_score 최대: +20pt → +35pt
+#      (foreign +10 / institution +10 / BM-19 bonus +15)
+#   -> pension_net_buy 컬럼 없으면 보너스 0pt (하위호환)
 #
 # [v3.7 -> v3.8 changes]
 # - [FIX-A] FUNDAMENTAL_CSV: sfd_fundamental_watch_latest.csv (primary)
@@ -18,7 +24,20 @@
 # - BM-3  bias_filter_score
 # - [FIX-1] news: sfd_news_score_latest.csv
 # - [FIX-4] investor: direct foreign_net_buy/institution_net_buy calc
+#           -> v3.9: pension_net_buy 추가 (pnsn_ntby_qty)
 # - [FIX-5] theme: graceful handling
+#
+# 점수 아키텍처 (주요 구성요소 최대치)
+# ─────────────────────────────────────────────────────
+#  tech_score       최대  +30pt  (MA배열 +15 / 거래량 +10 / RSI +5)
+#  news_score       최대  +30pt
+#  fundamental_score 최대 +20pt
+#  investor_score   최대  +35pt  (외국인 +10 / 기관 +10 / [BM-19] 연기금 동시 +15)
+#  theme_score      최대  +20pt
+#  BM-10 vol_surge  최대  +15pt
+#  BM-12 pullback   최대  +10pt
+#  BM-18 alpha_decay 최대 +10pt
+# ─────────────────────────────────────────────────────
 
 import os
 import sys
@@ -61,7 +80,6 @@ NO_TRADE_JSON       = os.path.join(LATEST_DIR, "sfd_no_trade_tickers.json")
 ZONE_PULLBACK_CSV   = os.path.join(LATEST_DIR, "sfd_zone_pullback_latest.csv")
 TIMEOUT_STATE_JSON  = os.path.join(LATEST_DIR, "signal_timeout_state.json")
 ALPHA_DECAY_CSV     = os.path.join(LATEST_DIR, "bm18_alpha_decay.csv")  # [BM-18]
-W52H_CSV            = os.path.join(LATEST_DIR, "sfd_52w_high_latest.csv")  # [BM-19]
 
 logging.basicConfig(
     handlers=[
@@ -183,8 +201,11 @@ def score_investor(ticker, investor_df):
     [FIX-B] auto-detect stock_code/ticker column name
     - KIS API v2.1 output: stock_code column
     - legacy version: ticker column
-    - foreign_net_buy > 0: +10pt
+    - foreign_net_buy > 0:     +10pt
     - institution_net_buy > 0: +10pt
+    - [BM-19] foreign_net_buy > 0 AND institution_net_buy > 0
+              AND pension_net_buy > 0: +15pt 보너스 (최대 +35pt)
+    - pension_net_buy 컬럼 없으면 보너스 0pt (하위호환)
     - data_status==ZERO/FAIL: 0pt
     """
     if investor_df is None or investor_df.empty: return 0
@@ -201,7 +222,13 @@ def score_investor(ticker, investor_df):
         if status in ("ZERO", "FAIL"): return 0
         f = float(row.iloc[0].get("foreign_net_buy", 0))
         i = float(row.iloc[0].get("institution_net_buy", 0))
-        return (10 if f > 0 else 0) + (10 if i > 0 else 0)
+        score = (10 if f > 0 else 0) + (10 if i > 0 else 0)
+        # [BM-19] 외국인 + 기관 + 연기금 동시 순매수 보너스
+        if "pension_net_buy" in investor_df.columns:
+            pension = float(row.iloc[0].get("pension_net_buy", 0))
+            if f > 0 and i > 0 and pension > 0:
+                score += 15
+        return score
     except: return 0
 
 def score_theme(ticker, prev_df):
@@ -303,25 +330,24 @@ def load_decay_score_map() -> dict:
         return {}
 
 
-# -- [BM-19] 52w High Proximity --─────────────────────────────────────────────
-def load_52w_score_map() -> dict:
-    if not os.path.exists(W52H_CSV):
-        logging.info("[BM-19] sfd_52w_high_latest.csv not found -> score=0")
-        return {}
-    try:
-        df = pd.read_csv(W52H_CSV, dtype={"ticker": str})
-        result = {}
-        for _, row in df.iterrows():
-            result[str(row["ticker"]).zfill(6)] = {
-                "score_52w":     float(row.get("score_52w",     0) or 0),
-                "high_52w":      float(row.get("high_52w",      0) or 0),
-                "proximity_pct": float(row.get("proximity_pct", 0) or 0),
-            }
-        logging.info(f"[BM-19] 52w_map: {len(result)}종목")
+def load_dart_event_map() -> dict:
+    """[BM-19] DART 이벤트 점수 맵 로드 — ticker → impact_score"""
+    result = {}
+    csv_path = os.path.join(LATEST_DIR, "sfd_dart_event_latest.csv")
+    if not os.path.exists(csv_path):
         return result
+    try:
+        with open(csv_path, encoding="utf-8-sig", newline="") as f:
+            for row in csv.DictReader(f):
+                ticker = row.get("ticker", "").zfill(6)
+                score  = int(float(row.get("impact_score", 0) or 0))
+                etype  = row.get("event_type", "")
+                # 동일 종목 중복 시 절댓값 큰 것 우선
+                if ticker not in result or abs(score) > abs(result[ticker]["score"]):
+                    result[ticker] = {"score": score, "event_type": etype}
     except Exception as e:
-        logging.warning(f"[BM-19] 52w_map 로드 실패: {e}")
-        return {}
+        pass
+    return result
 
 
 # -- [BM-13] Signal Timeout State Machine --───────────────────────────────────
@@ -547,7 +573,7 @@ def main():
     zone_pullback_map = load_zone_pullback_map()
     timeout_state     = load_timeout_state()
     decay_map         = load_decay_score_map()  # [BM-18]
-    w52h_map          = load_52w_score_map()     # [BM-19]
+    dart_map          = load_dart_event_map()   # [BM-19]
 
     use_tech_detail = len(tech_detail_map) > 0
     logging.info(
@@ -654,11 +680,11 @@ def main():
         decay_score = float(dc_data.get("decay_score", 0))
         decay_flag  = str(dc_data.get("decay_flag", "FRESH"))
 
-        w52h_data  = w52h_map.get(ticker, {})  # [BM-19]
-        score_52w  = float(w52h_data.get("score_52w", 0))
-
+        # [BM-19] DART 이벤트 점수
+        dart_hit   = dart_map.get(ticker, {})
+        dart_score = dart_hit.get("score", 0)
         total      = (t_score + n_score + i_score + ths_score + f_score
-                      + bias_score + vs_score + zp_score + decay_score + score_52w)
+                      + bias_score + vs_score + zp_score + decay_score + dart_score)
         raw_signal = classify_signal(total)
 
         (timeout_signal, bars_elapsed, issued_date,
@@ -715,7 +741,6 @@ def main():
             "zone_pullback_label":  zp_label,
             "decay_score":          decay_score,   # [BM-18]
             "decay_flag":           decay_flag,    # [BM-18]
-            "score_52w":            score_52w,     # [BM-19]
             "tech_ver":             tech_ver,
         })
 

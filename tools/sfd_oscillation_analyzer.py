@@ -1,29 +1,24 @@
-# sfd_oscillation_analyzer.py | v1.2 | Layer 2.8 | Claude (Anthropic) 2026-06-01
-# Deploy to: sfd-pipeline/tools/sfd_oscillation_analyzer.py
+# sfd_oscillation_analyzer.py | v1.0 | Layer 2.8 | Claude (Anthropic) 2026-05-29
+# Deploy to: D:\AI_WorkSpace\I_SFC\09_Implementation\SFC_DataPipeline\tools\sfd_oscillation_analyzer.py
 #
-# [v1.1 → v1.2 변경사항]
-# - [BM-12] ZONE_PULLBACK ATR 기반 눌림목 감지 추가
-#   calc_zone_pullback(df, atr) → zone_pullback_score (0~15pt), zone_pullback_label
+# [Layer 2.8] 가격 진동 패턴 분석 + 거미줄 매매 격자 동적 계산
 #
-#   로직:
-#     1) 직전 스윙 고점 탐색 (lookback 30봉 내)
-#     2) 현재가가 직전 고점 대비 1~2 ATR 이내 되돌림 → PULLBACK_1ATR / PULLBACK_2ATR
-#     3) phase가 LOWER_MID 또는 BOTTOM_ZONE → 점수 상향
-#     4) 거래량 확인 (vol < vol_avg × 0.8) → 저거래량 눌림목 가산점
+# 기존 portfolio.json web_strategy: 고정 -15% 격자 (모든 종목 동일)
+# v1.0 업그레이드: 종목별 실제 진동 폭 측정 → 동적 격자 간격 자동 산출
 #
-#   score 체계:
-#     PULLBACK_1ATR + LOWER_MID/BOTTOM_ZONE + 저거래량 → 15pt (최고)
-#     PULLBACK_1ATR + LOWER_MID/BOTTOM_ZONE              → 12pt
-#     PULLBACK_2ATR + LOWER_MID/BOTTOM_ZONE              → 8pt
-#     PULLBACK_1ATR + MID_ZONE                           → 5pt
-#     그 외 눌림목 없음                                   → 0pt
+# [분석 지표]
+#   [A] 스윙 진폭 (Swing Amplitude): 최근 N개 고저점 간 평균 진폭
+#   [B] 진동 주기 (Cycle Period): 연속 저점 간 평균 일수
+#   [C] ATR 기반 변동성: Average True Range × 배수 = 적정 격자 간격
+#   [D] 현재 페이즈: BOTTOM / LOWER_MID / UPPER_MID / TOP
 #
-#   출력 컬럼: zone_pullback_score, zone_pullback_label
-#   출력 파일: sfd_oscillation_latest.csv에 컬럼 추가
-#              sfd_zone_pullback_latest.csv (점수 > 0 종목만 별도 저장)
-#
-# [v1.1 변경사항] (유지)
-#   MIN_GRID_PCT: 10.0, MAX_GRID_PCT: 30.0, ATR_MULT: 2.0, SWING_DISTANCE: 7
+# [거미줄 격자 출력]
+#   - grid_pct:        종목별 격자 간격 (%)
+#   - grid_levels:     BUY 1~4단계 가격
+#   - qty_ratio:       단계별 수량 비율 (1:2:3:4 피라미딩)
+#   - phase:           현재 진동 위치
+#   - days_to_bottom:  예상 저점 도달 일수
+#   - action:          즉시 매수 / 대기 / 홀드
 
 import os
 import sys
@@ -56,11 +51,10 @@ DATA_DIR    = os.path.join(BASE_DIR, "data")
 os.makedirs(LATEST_DIR,  exist_ok=True)
 os.makedirs(HISTORY_DIR, exist_ok=True)
 
-PORTFOLIO_JSON      = os.path.join(DATA_DIR,    "portfolio.json")
-OUTPUT_CSV          = os.path.join(LATEST_DIR,  "sfd_oscillation_latest.csv")
-GRID_SIGNAL_CSV     = os.path.join(LATEST_DIR,  "sfd_grid_signal_latest.csv")
-ZONE_PULLBACK_CSV   = os.path.join(LATEST_DIR,  "sfd_zone_pullback_latest.csv")  # ★ BM-12
-LOG_PATH            = os.path.join(LATEST_DIR,  "sfd_oscillation_analyzer.log")
+PORTFOLIO_JSON   = os.path.join(DATA_DIR,    "portfolio.json")
+OUTPUT_CSV       = os.path.join(LATEST_DIR,  "sfd_oscillation_latest.csv")
+GRID_SIGNAL_CSV  = os.path.join(LATEST_DIR,  "sfd_grid_signal_latest.csv")
+LOG_PATH         = os.path.join(LATEST_DIR,  "sfd_oscillation_analyzer.log")
 
 logging.basicConfig(
     handlers=[
@@ -71,451 +65,437 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s",
 )
 
-# ── 파라미터 (★ v1.1 튜닝 유지, v1.2 BM-12 추가) ──────────────────────────
-LOOKBACK_DAYS    = 120
-ATR_PERIOD       = 14
-SWING_DISTANCE   = 7        # ★ v1.1: 5→7
-MIN_SWINGS       = 3
-MAX_GRID_STEPS   = 4
-QTY_RATIOS       = [1, 2, 3, 4]
+# ── 파라미터 ─────────────────────────────────────────────────────────────────
+LOOKBACK_DAYS      = 120    # 진동 패턴 분석 기간
+ATR_PERIOD         = 14
+SWING_DISTANCE     = 5      # 스윙 고저점 최소 거리(봉)
+MIN_SWINGS         = 3      # 유효 패턴 판단 최소 스윙 수
+MAX_GRID_STEPS     = 4      # 거미줄 단계 수
+QTY_RATIOS         = [1, 2, 3, 4]   # 단계별 수량 비율 (피라미딩)
 
-MIN_GRID_PCT     = 10.0     # ★ v1.1: 3.0→10.0
-MAX_GRID_PCT     = 30.0     # ★ v1.1: 25.0→30.0
-ATR_MULT         = 2.0      # ★ v1.1: 1.5→2.0
+# 격자 간격 제약 (종목 실제 진폭 기반이지만 상하한 적용)
+MIN_GRID_PCT       = 3.0    # 최소 격자 간격: 3%
+MAX_GRID_PCT       = 25.0   # 최대 격자 간격: 25%
 
-# [BM-12] ZONE_PULLBACK 파라미터
-ZP_LOOKBACK_BARS = 30       # 직전 고점 탐색 구간 (봉)
-ZP_ATR_NEAR_1    = 1.0      # 1 ATR 이내 = 근접 눌림목
-ZP_ATR_NEAR_2    = 2.0      # 2 ATR 이내 = 중간 눌림목
-ZP_VOL_QUIET     = 0.8      # 저거래량 임계 (vol_avg의 80% 이하 = 조용한 눌림목)
-
-START_TIME = time.time()
+START_TIME         = time.time()
 
 
-# ── OHLCV 로드 ────────────────────────────────────────────────────────────────
-def fetch_ohlcv(ticker, end_date):
+# ── OHLCV 수집 ────────────────────────────────────────────────────────────────
+def fetch_ohlcv(ticker: str, end_date: datetime) -> pd.DataFrame | None:
     try:
         start = (end_date - timedelta(days=LOOKBACK_DAYS * 2)).strftime("%Y-%m-%d")
-        df    = fdr.DataReader(ticker, start, end_date.strftime("%Y-%m-%d"))
+        end   = end_date.strftime("%Y-%m-%d")
+        df    = fdr.DataReader(ticker, start, end)
         if df is None or len(df) < 30: return None
         return df.sort_index().tail(LOOKBACK_DAYS)
     except:
         return None
 
 
-# ── 스윙 분석 ─────────────────────────────────────────────────────────────────
-def calc_swing_analysis(df):
+# ── [A] 스윙 진폭 분석 ────────────────────────────────────────────────────────
+def calc_swing_analysis(df: pd.DataFrame) -> dict:
+    """
+    고점/저점 스윙 탐지 → 진폭 & 주기 계산
+    Returns: {amplitude_pct, cycle_days, swing_count, reliability}
+    """
     try:
         close = df["Close"].values
+        high  = df["High"].values
+        low   = df["Low"].values
+
         if SCIPY_AVAILABLE:
+            # 저점 탐지
             low_peaks,  _ = find_peaks(-close, distance=SWING_DISTANCE, prominence=close.mean() * 0.02)
+            # 고점 탐지
             high_peaks, _ = find_peaks( close, distance=SWING_DISTANCE, prominence=close.mean() * 0.02)
         else:
             w = SWING_DISTANCE
-            low_peaks  = np.array([i for i in range(w, len(close)-w) if close[i] == min(close[i-w:i+w+1])])
-            high_peaks = np.array([i for i in range(w, len(close)-w) if close[i] == max(close[i-w:i+w+1])])
+            low_peaks  = [i for i in range(w, len(close)-w) if close[i] == min(close[i-w:i+w+1])]
+            high_peaks = [i for i in range(w, len(close)-w) if close[i] == max(close[i-w:i+w+1])]
+            low_peaks  = np.array(low_peaks)
+            high_peaks = np.array(high_peaks)
 
         if len(low_peaks) < MIN_SWINGS or len(high_peaks) < MIN_SWINGS:
-            return {"amplitude_pct": 15.0, "cycle_days": 20, "swing_count": 0,
-                    "reliability": "LOW", "low_peaks": np.array([]), "high_peaks": high_peaks if len(high_peaks) > 0 else np.array([])}
+            return {"amplitude_pct": 15.0, "cycle_days": 20, "swing_count": 0, "reliability": "LOW"}
 
+        # 진폭: 고점/저점 간 평균 비율 차이
         amplitudes = []
         for lp in low_peaks:
-            nearest_hp = high_peaks[np.argmin(np.abs(high_peaks - lp))]
-            amp = abs(close[nearest_hp] - close[lp]) / close[lp] * 100
-            if 1.0 < amp < 60.0:
-                amplitudes.append(amp)
+            # 가장 가까운 고점 찾기
+            dists = np.abs(high_peaks - lp)
+            nearest_hp = high_peaks[np.argmin(dists)]
+            amp_pct = abs(close[nearest_hp] - close[lp]) / close[lp] * 100
+            if 1.0 < amp_pct < 60.0:  # 이상치 제거
+                amplitudes.append(amp_pct)
 
-        cycles = [low_peaks[i] - low_peaks[i-1] for i in range(1, len(low_peaks))]
+        # 주기: 연속 저점 간 평균 일수
+        cycles = []
+        if len(low_peaks) >= 2:
+            for i in range(1, len(low_peaks)):
+                cycles.append(low_peaks[i] - low_peaks[i-1])
+
+        amplitude_pct = float(np.median(amplitudes)) if amplitudes else 15.0
+        cycle_days    = int(np.median(cycles))        if cycles    else 20
+        swing_count   = min(len(amplitudes), len(cycles))
+
+        reliability = "HIGH" if swing_count >= 5 else "MED" if swing_count >= MIN_SWINGS else "LOW"
 
         return {
-            "amplitude_pct": round(float(np.median(amplitudes)), 2) if amplitudes else 15.0,
-            "cycle_days":    int(np.median(cycles)) if cycles else 20,
-            "swing_count":   min(len(amplitudes), len(cycles)),
-            "reliability":   "HIGH" if min(len(amplitudes), len(cycles)) >= 5 else
-                             "MED"  if min(len(amplitudes), len(cycles)) >= MIN_SWINGS else "LOW",
+            "amplitude_pct": round(amplitude_pct, 2),
+            "cycle_days":    cycle_days,
+            "swing_count":   swing_count,
+            "reliability":   reliability,
             "low_peaks":     low_peaks,
-            "high_peaks":    high_peaks,
         }
     except Exception as e:
         logging.debug(f"swing_analysis error: {e}")
-        return {"amplitude_pct": 15.0, "cycle_days": 20, "swing_count": 0,
-                "reliability": "LOW", "low_peaks": np.array([]), "high_peaks": np.array([])}
+        return {"amplitude_pct": 15.0, "cycle_days": 20, "swing_count": 0, "reliability": "LOW", "low_peaks": np.array([])}
 
 
-# ── ATR 계산 ──────────────────────────────────────────────────────────────────
-def calc_atr(df, period=14):
+# ── [B] ATR 기반 변동성 ───────────────────────────────────────────────────────
+def calc_atr(df: pd.DataFrame, period: int = 14) -> float:
     try:
-        h, l, c = df["High"], df["Low"], df["Close"]
-        tr = pd.concat([h-l, (h-c.shift()).abs(), (l-c.shift()).abs()], axis=1).max(axis=1)
-        return float(tr.rolling(period).mean().iloc[-1])
+        high  = df["High"]
+        low   = df["Low"]
+        close = df["Close"]
+        tr    = pd.concat([
+            high - low,
+            (high - close.shift()).abs(),
+            (low  - close.shift()).abs(),
+        ], axis=1).max(axis=1)
+        atr = tr.rolling(period).mean().iloc[-1]
+        return float(atr)
     except:
         return float(df["Close"].std())
 
 
-# ── Phase 계산 ────────────────────────────────────────────────────────────────
-def calc_phase(df, swing_data):
+# ── [C] 현재 진동 페이즈 판단 ────────────────────────────────────────────────
+def calc_phase(df: pd.DataFrame, swing_data: dict) -> dict:
+    """
+    최근 N일 고/저점 대비 현재가 위치 → 페이즈 판단
+    Returns: {phase, phase_pct, days_since_low, est_days_to_bottom}
+    """
     try:
         close   = df["Close"].values
         current = close[-1]
-        recent  = close[-30:]
-        r_high, r_low = recent.max(), recent.min()
+
+        # 최근 진동 범위 계산
+        recent = close[-30:]  # 최근 30일
+        r_high = recent.max()
+        r_low  = recent.min()
         r_range = r_high - r_low
 
         if r_range == 0:
-            return {"phase": "FLAT", "phase_pct": 50.0, "days_since_low": 0,
-                    "est_days_to_bottom": 0, "recent_high": r_high, "recent_low": r_low}
+            return {"phase": "FLAT", "phase_pct": 50.0, "days_since_low": 0, "est_days_to_bottom": 0}
 
+        # 현재가의 범위 내 위치 (0% = 저점, 100% = 고점)
         phase_pct = (current - r_low) / r_range * 100
-        if   phase_pct <= 20: phase = "BOTTOM_ZONE"
-        elif phase_pct <= 40: phase = "LOWER_MID"
-        elif phase_pct <= 60: phase = "MID_ZONE"
-        elif phase_pct <= 80: phase = "UPPER_MID"
-        else:                 phase = "TOP_ZONE"
 
-        low_peaks      = swing_data.get("low_peaks", np.array([]))
+        if phase_pct <= 20:
+            phase = "BOTTOM_ZONE"        # 저점 구간 → 즉시 매수 검토
+        elif phase_pct <= 40:
+            phase = "LOWER_MID"          # 하락 중간 → 분할 매수 준비
+        elif phase_pct <= 60:
+            phase = "MID_ZONE"           # 중립
+        elif phase_pct <= 80:
+            phase = "UPPER_MID"          # 상승 중간 → 매도 준비
+        else:
+            phase = "TOP_ZONE"           # 고점 구간 → 매도 검토
+
+        # 마지막 저점 이후 경과일
+        low_peaks = swing_data.get("low_peaks", np.array([]))
         days_since_low = int(len(close) - low_peaks[-1]) if len(low_peaks) > 0 else 0
-        cycle          = swing_data.get("cycle_days", 20)
-        est_bottom     = max(0, cycle - days_since_low)
+
+        # 다음 저점까지 예상 일수
+        cycle = swing_data.get("cycle_days", 20)
+        est_days_to_bottom = max(0, cycle - days_since_low)
 
         return {
-            "phase": phase, "phase_pct": round(phase_pct, 1),
-            "days_since_low": days_since_low, "est_days_to_bottom": est_bottom,
-            "recent_high": round(float(r_high), 0), "recent_low": round(float(r_low), 0),
+            "phase":                phase,
+            "phase_pct":            round(phase_pct, 1),
+            "days_since_low":       days_since_low,
+            "est_days_to_bottom":   est_days_to_bottom,
+            "recent_high":          round(float(r_high), 0),
+            "recent_low":           round(float(r_low), 0),
         }
     except Exception as e:
         logging.debug(f"calc_phase error: {e}")
-        return {"phase": "UNKNOWN", "phase_pct": 50.0, "days_since_low": 0,
-                "est_days_to_bottom": 0, "recent_high": 0, "recent_low": 0}
+        return {"phase": "UNKNOWN", "phase_pct": 50.0, "days_since_low": 0, "est_days_to_bottom": 0}
 
 
-# ── [BM-12] ZONE_PULLBACK 계산 ────────────────────────────────────────────────
-def calc_zone_pullback(df, atr_val, phase_data, swing_data) -> dict:
+# ── [D] 거미줄 격자 계산 (핵심) ───────────────────────────────────────────────
+def calc_grid(current_price: float, amplitude_pct: float,
+              atr: float, phase_data: dict, base_price: float = None) -> dict:
     """
-    ATR 기반 눌림목 감지 (BM-12 ZONE_PULLBACK)
-
-    알고리즘:
-      1) 최근 ZP_LOOKBACK_BARS 봉에서 직전 스윙 고점 탐색
-      2) 현재가가 직전 고점 대비 1~2 ATR 이내 되돌림 여부 판정
-      3) phase + 저거래량 여부로 점수 결정
-
-    Returns:
-      {
-        "zone_pullback_score": 0~15,
-        "zone_pullback_label": str,
-        "zp_swing_high": float,        # 직전 스윙 고점 가격
-        "zp_distance_atr": float,      # 고점 대비 현재가 거리 (ATR 배수)
-        "zp_vol_quiet": bool,          # 저거래량 여부
-      }
+    실제 진동 폭 기반 동적 격자 계산
+    - 격자 간격 = 진폭 / 4 (4단계 분할)
+    - 최소/최대 제약 적용
+    - 피라미딩: 1:2:3:4 수량 비율
+    Returns: {grid_pct, grid_levels, qty_plan, action}
     """
-    try:
-        close  = df["Close"].values
-        volume = df["Volume"].values if "Volume" in df.columns else None
-        n      = len(close)
-        current = close[-1]
-        phase   = phase_data.get("phase", "UNKNOWN")
+    # 격자 간격 결정: amplitude/4 기반, ATR 보정
+    atr_pct      = atr / current_price * 100
+    grid_pct_raw = amplitude_pct / MAX_GRID_STEPS  # 진폭 4등분
+    grid_pct_atr = atr_pct * 1.5                   # ATR 기반 보조 계산
+    grid_pct     = max(grid_pct_raw, grid_pct_atr)  # 더 큰 쪽 선택 (안전마진)
+    grid_pct     = max(MIN_GRID_PCT, min(MAX_GRID_PCT, grid_pct))  # 제약 적용
+    grid_pct     = round(grid_pct, 1)
 
-        if atr_val <= 0 or current <= 0:
-            return {"zone_pullback_score": 0, "zone_pullback_label": "NO_DATA",
-                    "zp_swing_high": 0.0, "zp_distance_atr": 0.0, "zp_vol_quiet": False}
+    # 격자 기준가: base_price(매수가) 또는 현재가
+    anchor = base_price if base_price else current_price
 
-        # 직전 스윙 고점 탐색 (최근 ZP_LOOKBACK_BARS 봉)
-        lookback_start = max(0, n - ZP_LOOKBACK_BARS - 1)
-        recent_close   = close[lookback_start:-1]  # 현재봉 제외
-
-        swing_high = float(np.max(recent_close)) if len(recent_close) > 0 else 0.0
-
-        if swing_high <= 0 or swing_high <= current:
-            # 현재가가 고점 이상 → 눌림목 없음
-            return {"zone_pullback_score": 0, "zone_pullback_label": "ABOVE_SWING_HIGH",
-                    "zp_swing_high": round(swing_high, 0), "zp_distance_atr": 0.0, "zp_vol_quiet": False}
-
-        # 고점 대비 현재가 거리 (ATR 배수)
-        distance      = swing_high - current
-        distance_atr  = round(distance / atr_val, 2)
-
-        # 저거래량 판정
-        vol_quiet = False
-        if volume is not None and len(volume) >= 20:
-            vol_avg   = float(np.mean(volume[-20:]))
-            vol_cur   = float(volume[-1])
-            vol_quiet = (vol_cur < vol_avg * ZP_VOL_QUIET) if vol_avg > 0 else False
-
-        # phase 분류
-        phase_is_low = phase in ("BOTTOM_ZONE", "LOWER_MID")
-        phase_is_mid = phase == "MID_ZONE"
-
-        # score 결정
-        if distance_atr <= ZP_ATR_NEAR_1:
-            # 1 ATR 이내 = 근접 눌림목
-            if phase_is_low and vol_quiet:
-                score = 15
-                label = "PULLBACK_1ATR_LOW_QUIET"
-            elif phase_is_low:
-                score = 12
-                label = "PULLBACK_1ATR_LOW"
-            elif phase_is_mid:
-                score = 5
-                label = "PULLBACK_1ATR_MID"
-            else:
-                score = 3
-                label = "PULLBACK_1ATR_HIGH"
-        elif distance_atr <= ZP_ATR_NEAR_2:
-            # 1~2 ATR 이내 = 중간 눌림목
-            if phase_is_low and vol_quiet:
-                score = 10
-                label = "PULLBACK_2ATR_LOW_QUIET"
-            elif phase_is_low:
-                score = 8
-                label = "PULLBACK_2ATR_LOW"
-            elif phase_is_mid:
-                score = 4
-                label = "PULLBACK_2ATR_MID"
-            else:
-                score = 2
-                label = "PULLBACK_2ATR_HIGH"
-        else:
-            # 2 ATR 초과 = 눌림목 아님 (단순 하락)
-            score = 0
-            label = "NO_PULLBACK"
-
-        return {
-            "zone_pullback_score": score,
-            "zone_pullback_label": label,
-            "zp_swing_high":       round(swing_high, 0),
-            "zp_distance_atr":     distance_atr,
-            "zp_vol_quiet":        vol_quiet,
-        }
-
-    except Exception as e:
-        logging.debug(f"calc_zone_pullback error: {e}")
-        return {"zone_pullback_score": 0, "zone_pullback_label": "ERROR",
-                "zp_swing_high": 0.0, "zp_distance_atr": 0.0, "zp_vol_quiet": False}
-
-
-# ── 격자 계산 ─────────────────────────────────────────────────────────────────
-def calc_grid(current_price, amplitude_pct, atr, phase_data, base_price=None):
-    atr_pct  = atr / current_price * 100
-    grid_pct = max(amplitude_pct / MAX_GRID_STEPS, atr_pct * ATR_MULT)
-    grid_pct = round(max(MIN_GRID_PCT, min(MAX_GRID_PCT, grid_pct)), 1)
-    anchor   = base_price if base_price else current_price
-
-    buy_levels  = []
-    sell_levels = []
-
+    # 매수 격자 레벨 (하락 시)
+    buy_levels = []
     for step in range(1, MAX_GRID_STEPS + 1):
-        tprice = round(anchor * (1 + (-grid_pct * step) / 100))
-        status = "ACTIVE"  if abs(current_price - tprice) / tprice < 0.02 else \
-                 "NEAR"    if current_price <= tprice * 1.05 else "PENDING"
-        buy_levels.append({"step": step, "trigger_pct": -grid_pct * step,
-                           "trigger_price": tprice, "qty_ratio": QTY_RATIOS[step-1], "status": status})
-        sell_levels.append({"step": step, "target_pct": grid_pct * step,
-                            "target_price": round(anchor * (1 + (grid_pct * step) / 100))})
+        trigger_pct   = -grid_pct * step
+        trigger_price = round(anchor * (1 + trigger_pct / 100))
+        qty_ratio     = QTY_RATIOS[step - 1]
+        status        = "ACTIVE" if current_price <= trigger_price * 1.02 and current_price >= trigger_price * 0.98 else \
+                        "NEAR"   if current_price <= trigger_price * 1.05 else \
+                        "PENDING"
+        buy_levels.append({
+            "step":          step,
+            "trigger_pct":   trigger_pct,
+            "trigger_price": trigger_price,
+            "qty_ratio":     qty_ratio,
+            "status":        status,
+        })
 
-    phase    = phase_data.get("phase", "UNKNOWN")
+    # 매도 격자 레벨 (상승 시)
+    sell_levels = []
+    for step in range(1, MAX_GRID_STEPS + 1):
+        sell_pct   = grid_pct * step
+        sell_price = round(anchor * (1 + sell_pct / 100))
+        sell_levels.append({
+            "step":       step,
+            "target_pct": sell_pct,
+            "target_price": sell_price,
+        })
+
+    # 액션 판단
+    phase = phase_data.get("phase", "UNKNOWN")
     est_days = phase_data.get("est_days_to_bottom", 99)
-    near     = [l for l in buy_levels if l["status"] in ["ACTIVE", "NEAR"]]
+    near_steps = [l for l in buy_levels if l["status"] in ["ACTIVE", "NEAR"]]
 
-    if   phase == "BOTTOM_ZONE" and near:                          action = f"BUY_NOW_STEP{near[0]['step']}"
-    elif phase in ["BOTTOM_ZONE", "LOWER_MID"] and est_days <= 3: action = "BUY_SOON"
-    elif phase == "LOWER_MID"   and near:                          action = f"BUY_READY_STEP{near[0]['step']}"
-    elif phase in ["TOP_ZONE", "UPPER_MID"]:                       action = "SELL_ZONE"
-    else:                                                           action = "HOLD_WATCH"
+    if phase == "BOTTOM_ZONE" and near_steps:
+        action = f"BUY_NOW_STEP{near_steps[0]['step']}"
+    elif phase in ["BOTTOM_ZONE", "LOWER_MID"] and est_days <= 3:
+        action = "BUY_SOON"
+    elif phase in ["LOWER_MID"] and near_steps:
+        action = f"BUY_READY_STEP{near_steps[0]['step']}"
+    elif phase in ["TOP_ZONE", "UPPER_MID"]:
+        action = "SELL_ZONE"
+    else:
+        action = "HOLD_WATCH"
 
-    return {"grid_pct": grid_pct, "buy_levels": buy_levels, "sell_levels": sell_levels, "action": action}
+    return {
+        "grid_pct":    grid_pct,
+        "buy_levels":  buy_levels,
+        "sell_levels": sell_levels,
+        "action":      action,
+    }
 
 
-# ── 종목 분석 (메인 함수) ──────────────────────────────────────────────────────
-def analyze_ticker_oscillation(ticker, end_date, base_price=None):
+# ── 종목별 통합 분석 ──────────────────────────────────────────────────────────
+def analyze_ticker_oscillation(ticker: str, end_date: datetime,
+                                base_price: float = None) -> dict | None:
     df = fetch_ohlcv(ticker, end_date)
-    if df is None: return None
+    if df is None:
+        return None
 
     try:
-        current   = float(df["Close"].iloc[-1])
-        swing     = calc_swing_analysis(df)
-        atr_val   = calc_atr(df)
-        phase     = calc_phase(df, swing)
-        grid      = calc_grid(current, swing["amplitude_pct"], atr_val, phase, base_price)
-        # ★ [BM-12] ZONE_PULLBACK
-        zp        = calc_zone_pullback(df, atr_val, phase, swing)
+        current_price  = float(df["Close"].iloc[-1])
+        swing_data     = calc_swing_analysis(df)
+        atr_val        = calc_atr(df, ATR_PERIOD)
+        phase_data     = calc_phase(df, swing_data)
+        grid_data      = calc_grid(current_price, swing_data["amplitude_pct"],
+                                   atr_val, phase_data, base_price)
 
-        bl = grid["buy_levels"]
-        sl = grid["sell_levels"]
         return {
             "ticker":              ticker.zfill(6),
-            "current_price":       round(current, 0),
-            "base_price":          round(base_price, 0) if base_price else round(current, 0),
-            "amplitude_pct":       swing["amplitude_pct"],
-            "cycle_days":          swing["cycle_days"],
-            "swing_count":         swing["swing_count"],
-            "reliability":         swing["reliability"],
-            "atr_pct":             round(atr_val / current * 100, 2),
-            "phase":               phase["phase"],
-            "phase_pct":           phase["phase_pct"],
-            "days_since_low":      phase["days_since_low"],
-            "est_days_to_bottom":  phase["est_days_to_bottom"],
-            "recent_high":         phase.get("recent_high", 0),
-            "recent_low":          phase.get("recent_low", 0),
-            "grid_pct":            grid["grid_pct"],
-            "action":              grid["action"],
-            "buy_step1_price":     bl[0]["trigger_price"], "buy_step1_status": bl[0]["status"],
-            "buy_step2_price":     bl[1]["trigger_price"], "buy_step2_status": bl[1]["status"],
-            "buy_step3_price":     bl[2]["trigger_price"], "buy_step3_status": bl[2]["status"],
-            "buy_step4_price":     bl[3]["trigger_price"], "buy_step4_status": bl[3]["status"],
-            "sell_step1_price":    sl[0]["target_price"],
-            "sell_step2_price":    sl[1]["target_price"],
-            # ★ [BM-12] ZONE_PULLBACK 컬럼
-            "zone_pullback_score": zp["zone_pullback_score"],
-            "zone_pullback_label": zp["zone_pullback_label"],
-            "zp_swing_high":       zp["zp_swing_high"],
-            "zp_distance_atr":     zp["zp_distance_atr"],
-            "zp_vol_quiet":        zp["zp_vol_quiet"],
+            "current_price":       round(current_price, 0),
+            "base_price":          round(base_price, 0) if base_price else round(current_price, 0),
+            # 진동 패턴
+            "amplitude_pct":       swing_data["amplitude_pct"],
+            "cycle_days":          swing_data["cycle_days"],
+            "swing_count":         swing_data["swing_count"],
+            "reliability":         swing_data["reliability"],
+            # ATR
+            "atr":                 round(atr_val, 0),
+            "atr_pct":             round(atr_val / current_price * 100, 2),
+            # 페이즈
+            "phase":               phase_data["phase"],
+            "phase_pct":           phase_data["phase_pct"],
+            "days_since_low":      phase_data["days_since_low"],
+            "est_days_to_bottom":  phase_data["est_days_to_bottom"],
+            "recent_high":         phase_data.get("recent_high", 0),
+            "recent_low":          phase_data.get("recent_low", 0),
+            # 격자
+            "grid_pct":            grid_data["grid_pct"],
+            "action":              grid_data["action"],
+            # 격자 레벨 (CSV 직렬화)
+            "buy_step1_price":     grid_data["buy_levels"][0]["trigger_price"],
+            "buy_step1_status":    grid_data["buy_levels"][0]["status"],
+            "buy_step2_price":     grid_data["buy_levels"][1]["trigger_price"],
+            "buy_step2_status":    grid_data["buy_levels"][1]["status"],
+            "buy_step3_price":     grid_data["buy_levels"][2]["trigger_price"],
+            "buy_step3_status":    grid_data["buy_levels"][2]["status"],
+            "buy_step4_price":     grid_data["buy_levels"][3]["trigger_price"],
+            "buy_step4_status":    grid_data["buy_levels"][3]["status"],
+            "sell_step1_price":    grid_data["sell_levels"][0]["target_price"],
+            "sell_step2_price":    grid_data["sell_levels"][1]["target_price"],
+            # raw grid (JSON 저장용)
+            "_grid_detail":        json.dumps(grid_data, ensure_ascii=False),
         }
     except Exception as e:
-        logging.debug(f"analyze {ticker} error: {e}")
+        logging.debug(f"analyze_ticker_oscillation {ticker} error: {e}")
         return None
 
 
-# ── 포트폴리오 로드 ───────────────────────────────────────────────────────────
-def load_portfolio_tickers():
+# ── portfolio.json에서 보유 종목 + base_price 로드 ────────────────────────────
+def load_portfolio_tickers() -> list:
+    """
+    portfolio.json → [{ticker, name, base_price}]
+    없으면 signal_latest.csv에서 상위 종목 로드
+    """
+    # 1순위: portfolio.json
     if os.path.exists(PORTFOLIO_JSON):
         try:
             with open(PORTFOLIO_JSON, "r", encoding="utf-8") as f:
                 data = json.load(f)
+            holdings = data.get("holdings", [])
             result = []
-            for h in data.get("holdings", []):
+            for h in holdings:
                 ticker = str(h.get("ticker", "")).zfill(6)
-                ws     = h.get("web_strategy", {})
-                bp     = ws.get("base_price") or (h.get("positions", [{}])[0].get("price") if h.get("positions") else None)
+                name   = h.get("name", "")
+                # base_price: 첫 매수가 또는 web_strategy.base_price
+                ws         = h.get("web_strategy", {})
+                base_price = ws.get("base_price", None)
+                if not base_price:
+                    positions  = h.get("positions", [])
+                    base_price = positions[0]["price"] if positions else None
                 if ticker and ticker != "000000":
-                    result.append({"ticker": ticker, "name": h.get("name", ""), "base_price": bp})
-            logging.info(f"portfolio.json: {len(result)} holdings")
+                    result.append({"ticker": ticker, "name": name, "base_price": base_price})
+            logging.info(f"portfolio.json loaded: {len(result)} holdings")
             return result
         except Exception as e:
-            logging.warning(f"portfolio.json failed: {e}")
+            logging.warning(f"portfolio.json load failed: {e}")
 
+    # 2순위: sfd_master_signal_latest.csv 상위 20종목
     signal_csv = os.path.join(LATEST_DIR, "sfd_master_signal_latest.csv")
     if os.path.exists(signal_csv):
-        df  = pd.read_csv(signal_csv, encoding="utf-8-sig", dtype={"ticker": str})
-        top = df.head(20)[["ticker", "name"]].to_dict("records")
-        for r in top: r["base_price"] = None
-        return top
+        try:
+            df = pd.read_csv(signal_csv, encoding="utf-8-sig", dtype={"ticker": str})
+            top = df.head(20)[["ticker", "name"]].to_dict("records")
+            for row in top:
+                row["base_price"] = None
+            logging.info(f"signal_latest fallback: {len(top)} tickers")
+            return top
+        except:
+            pass
+
     return []
 
 
-def find_recent_trade_date():
+# ── 최근 거래일 ───────────────────────────────────────────────────────────────
+def find_recent_trade_date() -> datetime:
     now = datetime.now()
     for i in range(7):
         d = now - timedelta(days=i)
         if d.weekday() >= 5: continue
         try:
-            df = fdr.DataReader("005930", d.strftime("%Y-%m-%d"), d.strftime("%Y-%m-%d"))
+            ds = d.strftime("%Y-%m-%d")
+            df = fdr.DataReader("005930", ds, ds)
             if df is not None and len(df) > 0: return d
         except: pass
     return now
 
 
-# ── MAIN ──────────────────────────────────────────────────────────────────────
+# ── 메인 ──────────────────────────────────────────────────────────────────────
 def main():
-    logging.info("=== sfd_oscillation_analyzer v1.2 START ===")
-    logging.info(f"SCIPY: {SCIPY_AVAILABLE}")
-    logging.info(f"GRID PARAMS: MIN={MIN_GRID_PCT}% MAX={MAX_GRID_PCT}% ATR_MULT={ATR_MULT} SWING_DIST={SWING_DISTANCE}")
-    logging.info(f"[BM-12] ZONE_PULLBACK: lookback={ZP_LOOKBACK_BARS}봉 ATR_1={ZP_ATR_NEAR_1} ATR_2={ZP_ATR_NEAR_2} VOL_QUIET={ZP_VOL_QUIET}")
+    logging.info("=== sfd_oscillation_analyzer v1.0 START ===")
+    logging.info(f"BASE_DIR: {BASE_DIR}")
+    logging.info(f"SCIPY:    {SCIPY_AVAILABLE}")
 
-    end_date = find_recent_trade_date()
-    holdings = load_portfolio_tickers()
+    end_date  = find_recent_trade_date()
+    holdings  = load_portfolio_tickers()
 
     if not holdings:
-        logging.error("No tickers. Abort.")
+        logging.error("No tickers to analyze. portfolio.json or signal_latest.csv required.")
         sys.exit(1)
 
-    logging.info(f"Tickers: {len(holdings)} | date: {end_date.strftime('%Y%m%d')}")
+    logging.info(f"Analyzing {len(holdings)} tickers | trade_date: {end_date.strftime('%Y%m%d')}")
 
-    results       = []
-    grid_alerts   = []
-    zp_alerts     = []  # ★ BM-12
+    results     = []
+    grid_alerts = []   # 즉시 액션 필요 종목
 
     for h in holdings:
-        row = analyze_ticker_oscillation(h["ticker"], end_date, h.get("base_price"))
+        ticker     = h["ticker"]
+        base_price = h.get("base_price")
+        name       = h.get("name", "")
+
+        row = analyze_ticker_oscillation(ticker, end_date, base_price)
         if not row:
-            logging.warning(f"  SKIP: {h['ticker']}")
+            logging.warning(f"  SKIP: {ticker}")
             continue
-        row["name"] = h.get("name", "")
+
+        row["name"] = name
         results.append(row)
 
+        # 즉시 액션 알림
         if row["action"] not in ["HOLD_WATCH", "SELL_ZONE"]:
-            grid_alerts.append(row)
-
-        # ★ [BM-12] ZONE_PULLBACK 알림 대상
-        if row["zone_pullback_score"] >= 5:
-            zp_alerts.append(row)
+            grid_alerts.append({
+                "ticker":       ticker,
+                "name":         name,
+                "action":       row["action"],
+                "phase":        row["phase"],
+                "phase_pct":    row["phase_pct"],
+                "grid_pct":     row["grid_pct"],
+                "amplitude":    row["amplitude_pct"],
+                "cycle_days":   row["cycle_days"],
+                "est_bottom":   row["est_days_to_bottom"],
+                "buy_step1":    row["buy_step1_price"],
+                "buy_step1_st": row["buy_step1_status"],
+                "current":      row["current_price"],
+                "base_price":   row["base_price"],
+            })
 
         logging.info(
-            f"  {h['ticker']} | {row['phase']:12s} | amp={row['amplitude_pct']}% "
-            f"| cycle={row['cycle_days']}d | grid={row['grid_pct']}% | {row['action']}"
-            f" | ZP={row['zone_pullback_score']}pt({row['zone_pullback_label']})"
+            f"  {ticker} | phase={row['phase']} | amp={row['amplitude_pct']}% "
+            f"| cycle={row['cycle_days']}d | grid={row['grid_pct']}% | action={row['action']}"
         )
 
+    # CSV 저장
     if results:
-        cols_drop = ["low_peaks", "high_peaks", "_grid_detail"]
-        df_out = pd.DataFrame(results).drop(columns=cols_drop, errors="ignore")
+        df_out = pd.DataFrame(results).drop(columns=["_grid_detail", "low_peaks"], errors="ignore")
         df_out.to_csv(OUTPUT_CSV, index=False, encoding="utf-8-sig")
-        df_out.to_csv(
-            os.path.join(HISTORY_DIR, f"sfd_oscillation_{end_date.strftime('%Y%m%d')}.csv"),
-            index=False, encoding="utf-8-sig"
-        )
+        hist = os.path.join(HISTORY_DIR, f"sfd_oscillation_{end_date.strftime('%Y%m%d')}.csv")
+        df_out.to_csv(hist, index=False, encoding="utf-8-sig")
 
     if grid_alerts:
-        pd.DataFrame(grid_alerts).drop(columns=["low_peaks", "high_peaks", "_grid_detail"], errors="ignore")\
-          .to_csv(GRID_SIGNAL_CSV, index=False, encoding="utf-8-sig")
-
-    # ★ [BM-12] ZONE_PULLBACK 결과 별도 저장
-    if zp_alerts:
-        zp_df = pd.DataFrame(zp_alerts)[
-            ["ticker", "name", "current_price", "phase", "phase_pct",
-             "zone_pullback_score", "zone_pullback_label",
-             "zp_swing_high", "zp_distance_atr", "zp_vol_quiet",
-             "atr_pct", "reliability"]
-        ].sort_values("zone_pullback_score", ascending=False)
-        zp_df.to_csv(ZONE_PULLBACK_CSV, index=False, encoding="utf-8-sig")
+        df_alert = pd.DataFrame(grid_alerts)
+        df_alert.to_csv(GRID_SIGNAL_CSV, index=False, encoding="utf-8-sig")
+        logging.info(f"\n{'='*60}")
+        logging.info(f"[Grid Trade ALERT] {len(grid_alerts)} tickers require action")
+        for a in grid_alerts:
+            logging.info(
+                f"  [{a['action']}] {a['ticker']} {a['name']} | "
+                f"current={a['current']:,} base={a['base_price']:,} | "
+                f"grid={a['grid_pct']}% | amplitude={a['amplitude']}% | "
+                f"est_bottom={a['est_bottom']}d later"
+            )
+        logging.info(f"{'='*60}")
 
     elapsed = int(time.time() - START_TIME)
-    logging.info(
-        f"DONE | analyzed={len(results)} grid_alerts={len(grid_alerts)} "
-        f"zp_alerts={len(zp_alerts)} elapsed={elapsed}s"
-    )
-    print(
-        f"[OK] oscillation v1.2 | analyzed={len(results)} | "
-        f"grid_alerts={len(grid_alerts)} | [BM-12]zp={len(zp_alerts)} | elapsed={elapsed}s"
-    )
-
-    if zp_alerts:
-        print(f"\n{'='*70}")
-        print(f"[BM-12 ZONE_PULLBACK] {len(zp_alerts)}건 눌림목 감지")
-        for a in sorted(zp_alerts, key=lambda x: -x["zone_pullback_score"]):
-            print(
-                f"  [{a['zone_pullback_label']:30s}] {a['ticker']} {a.get('name',''):12s} | "
-                f"현재가={a['current_price']:>8,} | 직전고점={a['zp_swing_high']:>8,.0f} | "
-                f"거리={a['zp_distance_atr']:.1f}ATR | ZP={a['zone_pullback_score']}pt | "
-                f"저거래량={'Y' if a['zp_vol_quiet'] else 'N'}"
-            )
-        print(f"{'='*70}")
-
+    logging.info(f"DONE | analyzed={len(results)} alerts={len(grid_alerts)} elapsed={elapsed}s")
+    print(f"[OK] oscillation | analyzed={len(results)} | alerts={len(grid_alerts)} | elapsed={elapsed}s")
     if grid_alerts:
-        print(f"\n{'='*70}")
-        print(f"[격자매매 신호] {len(grid_alerts)}건")
+        print(f"\n[Grid Trade ALERT]")
         for a in grid_alerts:
-            print(
-                f"  [{a['action']:25s}] {a['ticker']} {a.get('name',''):12s} | "
-                f"현재가={a['current_price']:>8,} | 매수가={a['base_price']:>8,} | "
-                f"격자={a['grid_pct']}% | 진폭={a['amplitude_pct']}% | "
-                f"저점예측≈{a['est_days_to_bottom']}일\n"
-            )
-        print(f"{'='*70}")
-
+            print(f"  {a['action']:25s} | {a['ticker']} {a['name']:15s} | "
+                  f"current={a['current']:>8,} | grid={a['grid_pct']}% | "
+                  f"amplitude={a['amplitude']}% | est_bottom≈{a['est_bottom']}d")
     print(f"  -> {OUTPUT_CSV}")
-    if zp_alerts:
-        print(f"  -> {ZONE_PULLBACK_CSV}")
 
 
 if __name__ == "__main__":

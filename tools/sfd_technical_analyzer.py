@@ -1,42 +1,27 @@
-﻿# sfd_technical_analyzer.py | v1.4 | Layer 2.7 | Claude (Anthropic) 2026-05-31
-# Deploy to: sfd-pipeline/sfd_technical_analyzer.py
+# sfd_technical_analyzer.py | v1.6 | Layer 2.7 | Claude (Anthropic) 2026-06-15
+# Deploy to: SFC_DataPipeline/tools/sfd_technical_analyzer.py
 #
-# [Layer 2.7] 기술적 분석 / 스코어링 / 기준봉 자동 탐지
-# 입력: inputs/sfd_master_signal_input.csv  (ticker 목록)
-# 출력: outputs/latest/sfd_technical_latest.csv
+# [스코어 아키텍처] tech_total_score (max 98pt ★ v1.6)
+#   [A] Volume Profile POC+VAH+VAL   : 0~20pt  ★ v1.6 BM-20 교체
+#   [B] Support/Resistance            : 0~10pt
+#   [C] RSI                           : 0~5pt
+#   [D] MA 정배열                     : 0~10pt
+#   [E] Volume Gap Score              : 0~15pt
+#   [F] Standard Bar Score            : 0~10pt
+#   [G] Pullback Zone Score           : 0~10pt
+#   [H] Volume Surge Score (BM-10)    : 0~10pt
+#   [I] MA60 Direction (BM-2)         : 0~8pt
+#   [J] cap_trust 보정 (P_NEW_2)      : 승수 보정
 #
-# [스코어 아키텍처] tech_total_score (max 93pt ★ v1.4)
-#   [A] Volume Profile / POC 점수        : 0~15pt  (v1.0 유지)
-#   [B] Support/Resistance 점수          : 0~10pt  (v1.0 유지)
-#   [C] RSI 포지션 (과매도)               : 0~5pt   (v1.0 유지)
-#   [D] MA5>20>60>120 정배열 점수         : 0~10pt  (v1.0 유지)
-#   [E] Volume Gap Score (설거지 탐지)    : 0~15pt  ★ v1.1 추가
-#   [F] Standard Bar Score (기준봉 탐지)  : 0~10pt  ★ v1.1 추가
-#   [G] Pullback Zone Score (눌림목 탐지) : 0~10pt  ★ v1.2 신규
-#   [H] Volume Surge Score (치량천 탐지)  : 0~10pt  ★ v1.3 신규 BM-10
-#       합계 max = 85pt (기존 75pt → +10pt)
-#
-# [v1.3 변경사항]
-# - [H] vol_surge_score (치량천): Volume>Max20*1.5 AND 양봉 → +10pt (BM-10)
-# - tech_total_score max: 75pt → 85pt
-#
-# [v1.4 변경사항]
-# - [I] ma60_direction_score 추가: MA60 5봉 기울기 예측 → 0/2/5/8pt (BM-2)
-# - tech_total_score max: 85pt → 93pt
-#
-# [v1.3 변경사항]
-# - [H] vol_surge_score (치량천): Volume>Max20×1.5 AND 양봉 → +10pt (BM-10)
-# - tech_total_score max: 75pt → 85pt
-#
-# [v1.2 변경사항]
-# - [G] pullback_zone_score 추가 (야베스 숏딥/턴딥 + 차트프로 AF F구간)
+# [v1.6] calc_poc_score(0~15) → calc_vp_score(0~20) BM-20 교체
+#         VAH돌파20pt / VAH근접15pt / VA내8pt / VAL근접5pt / 이탈0pt / POC재접근+3pt
+# [v1.5] cap_trust_factor (P_NEW_2) / DXY=F→DX-Y.NYB (P3)
+# [v1.4] MA60 Direction BM-2
+# [v1.3] Volume Surge BM-10
+# [v1.2] Pullback Zone Score
 
-import os
-import sys
-import time
-import logging
+import os, sys, time, logging
 from datetime import datetime, timedelta
-
 import pandas as pd
 import numpy as np
 import FinanceDataReader as fdr
@@ -47,17 +32,12 @@ try:
 except ImportError:
     SCIPY_AVAILABLE = False
 
-# ── 경로 설정 (SFD_BASE_DIR 환경변수 우선, 없으면 __file__ 기반)
 _env_base = os.environ.get("SFD_BASE_DIR", "")
-if _env_base and os.path.isdir(_env_base):
-    BASE_DIR = _env_base
-else:
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR  = _env_base if _env_base and os.path.isdir(_env_base) else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 LATEST_DIR  = os.path.join(BASE_DIR, "outputs", "latest")
 HISTORY_DIR = os.path.join(BASE_DIR, "outputs", "history")
 INPUT_DIR   = os.path.join(BASE_DIR, "inputs")
-
 os.makedirs(LATEST_DIR,  exist_ok=True)
 os.makedirs(HISTORY_DIR, exist_ok=True)
 
@@ -66,20 +46,16 @@ OUTPUT_CSV = os.path.join(LATEST_DIR, "sfd_technical_latest.csv")
 LOG_PATH   = os.path.join(LATEST_DIR, "sfd_technical_analyzer.log")
 
 logging.basicConfig(
-    handlers=[
-        logging.FileHandler(LOG_PATH, encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
+    handlers=[logging.FileHandler(LOG_PATH, encoding="utf-8"), logging.StreamHandler(sys.stdout)],
+    level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s",
 )
 
 # ── 파라미터
-LOOKBACK_DAYS    = 60
-MA_PERIODS       = [5, 10, 20, 60, 120]
-RSI_PERIOD       = 14
-VOL_BINS         = 20
-SWING_DISTANCE   = 5
+LOOKBACK_DAYS = 60
+MA_PERIODS    = [5, 10, 20, 60, 120]
+RSI_PERIOD    = 14
+VOL_BINS      = 20
+SWING_DISTANCE = 5
 
 VOL_GAP_BOTTOM_PCT = 0.20
 VOL_GAP_TOP_PCT    = 0.20
@@ -95,441 +71,375 @@ PB_DROP_MAX_PCT     = 15.0
 PB_VOL_SHRINK_RATIO = 0.7
 PB_MA_ALIGN_REQ     = True
 
-# ★ [I] MA60 Direction 파라미터 (v1.4 신규 BM-2)
-MA60_DIR_LOOKBACK    = 5    # MA60 기울기 비교 봉수 (N봉 전 대비)
-MA60_DIR_RISING_STR  = 0.5  # 강한 상승 임계 (slope_pct >= +0.5%)
-MA60_DIR_RISING_MILD = 0.1  # 완만 상승 임계 (slope_pct >= +0.1%)
-MA60_DIR_FLAT_LOW    = -0.1 # 수평 하한 임계 (slope_pct >= -0.1%)
+MA60_DIR_LOOKBACK    = 5
+MA60_DIR_RISING_STR  = 0.5
+MA60_DIR_RISING_MILD = 0.1
+MA60_DIR_FLAT_LOW    = -0.1
+
+DXY_SYMBOL = "DX-Y.NYB"   # P3: DXY=F → DX-Y.NYB
+
+# ★ BM-20 파라미터
+VA_PERCENT_BM20   = 0.70
+VOL_BINS_BM20     = 30
+VAH_NEAR_PCT_BM20 = 2.0
+VAL_NEAR_PCT_BM20 = 2.0
+POC_NEAR_PCT_BM20 = 1.0
 
 START_TIME = time.time()
 
 
-# ── [A] Volume Profile / POC 점수 (0~15) ─────────────────────────────────────
-def calc_poc_score(df: pd.DataFrame) -> tuple:
+# ── [A] Volume Profile BM-20 (0~20pt) ★ v1.6 ────────────────────────────────
+def _calc_vp_raw(df: pd.DataFrame) -> dict:
+    """POC / VAH / VAL 원시 계산 (TV 표준 방식, 70% Value Area)"""
     try:
-        close   = df["Close"].values
-        volume  = df["Volume"].values
-        current = close[-1]
+        close, volume = df["Close"].values, df["Volume"].values
+        if len(close) < 10: return {}
+        pmin, pmax = close.min(), close.max()
+        if pmax == pmin: return {}
 
-        price_min, price_max = close.min(), close.max()
-        if price_max == price_min:
-            return 0, current, 0.0
+        bins        = np.linspace(pmin, pmax, VOL_BINS_BM20 + 1)
+        bin_centers = (bins[:-1] + bins[1:]) / 2
+        bin_idx     = np.clip(np.digitize(close, bins) - 1, 0, VOL_BINS_BM20 - 1)
+        vol_by_bin  = np.zeros(VOL_BINS_BM20)
+        for i, v in zip(bin_idx, volume): vol_by_bin[i] += v
 
-        bins      = np.linspace(price_min, price_max, VOL_BINS + 1)
-        bin_idx   = np.digitize(close, bins) - 1
-        bin_idx   = np.clip(bin_idx, 0, VOL_BINS - 1)
-        vol_by_bin = np.zeros(VOL_BINS)
-        for i, v in zip(bin_idx, volume):
-            vol_by_bin[i] += v
+        total_vol = vol_by_bin.sum()
+        if total_vol == 0: return {}
 
-        poc_bin   = np.argmax(vol_by_bin)
-        poc_price = (bins[poc_bin] + bins[poc_bin + 1]) / 2
-        pct_diff  = (current - poc_price) / poc_price * 100
+        poc_bin = int(np.argmax(vol_by_bin))
 
-        if pct_diff >= 3.0:    score = 15
-        elif pct_diff >= 1.0:  score = 12
-        elif pct_diff >= -1.0: score = 8
-        elif pct_diff >= -5.0: score = 3
-        else:                  score = 0
+        # Value Area 확장 (POC 기준 위/아래로 거래량 많은 쪽 우선)
+        va_vol, va_target = vol_by_bin[poc_bin], total_vol * VA_PERCENT_BM20
+        ai, bi, vh, vl   = poc_bin + 1, poc_bin - 1, poc_bin, poc_bin
 
-        return score, round(poc_price, 0), round(pct_diff, 2)
+        while va_vol < va_target:
+            aa = vol_by_bin[ai] if ai < VOL_BINS_BM20 else 0
+            ab = vol_by_bin[bi] if bi >= 0             else 0
+            if aa == 0 and ab == 0: break
+            if aa >= ab: va_vol += aa; vh = ai; ai += 1
+            else:        va_vol += ab; vl = bi; bi -= 1
+
+        poc = round(float(bin_centers[poc_bin]), 0)
+        return {
+            "poc_price":    poc,
+            "vah_price":    round(float(bin_centers[vh]), 0),
+            "val_price":    round(float(bin_centers[vl]), 0),
+            "va_width_pct": round((float(bin_centers[vh]) - float(bin_centers[vl])) / poc * 100, 2),
+        }
     except Exception as e:
-        logging.debug(f"poc_score error: {e}")
-        return 0, 0.0, 0.0
+        logging.debug(f"_calc_vp_raw error: {e}")
+        return {}
+
+
+def calc_vp_score(df: pd.DataFrame) -> tuple:
+    """
+    [BM-20] Volume Profile 점수 (0~20pt)
+    Returns: (score, poc_price, vah_price, val_price, vp_label, va_width_pct, vp_position)
+    """
+    try:
+        vp = _calc_vp_raw(df)
+        if not vp:
+            return 0, 0.0, 0.0, 0.0, "insufficient", 0.0, "unknown"
+
+        poc, vah, val = vp["poc_price"], vp["vah_price"], vp["val_price"]
+        va_w          = vp["va_width_pct"]
+        cur           = float(df["Close"].values[-1])
+
+        vah_near_lo = vah * (1 - VAH_NEAR_PCT_BM20 / 100)
+        val_near_hi = val * (1 + VAL_NEAR_PCT_BM20 / 100)
+        poc_hi      = poc * (1 + POC_NEAR_PCT_BM20 / 100)
+        poc_lo      = poc * (1 - POC_NEAR_PCT_BM20 / 100)
+
+        # POC 재접근 보너스
+        ca = df["Close"].values
+        poc_bonus = 3 if (len(ca) >= 4 and poc_lo <= ca[-4:-1].min() <= poc_hi and cur > poc) else 0
+
+        if cur > vah:
+            pct = (cur - vah) / vah * 100
+            if pct <= 3.0:   sc, lb, ps = 20, "vah_breakout_fresh",    "above_vah"
+            elif pct <= 8.0: sc, lb, ps = 16, "vah_breakout_extended", "above_vah"
+            else:            sc, lb, ps = 12, "vah_breakout_far",      "above_vah"
+        elif vah_near_lo <= cur <= vah:
+            sc, lb, ps = 15, "near_vah_testing", "near_vah"
+        elif val < cur < vah:
+            if poc_lo <= cur <= poc_hi:
+                sc, lb, ps = 10, "at_poc", "at_poc"
+            else:
+                pct_va = (cur - val) / (vah - val + 1e-9) * 100
+                if pct_va >= 60:   sc, lb, ps = 10, "in_va_upper", "in_va"
+                elif pct_va >= 40: sc, lb, ps = 8,  "in_va_mid",   "in_va"
+                else:              sc, lb, ps = 6,  "in_va_lower", "in_va"
+        elif val <= cur <= val_near_hi:
+            sc, lb, ps = 5, "near_val_support", "near_val"
+        else:
+            pct_bv = (val - cur) / val * 100 if val > 0 else 0
+            sc, lb, ps = (2, "below_val_slight", "below_val") if pct_bv <= 3.0 else (0, "below_val_broken", "below_val")
+
+        final = min(sc + poc_bonus, 20)
+        if poc_bonus: lb += "_poc_revisit"
+        return final, round(poc, 0), round(vah, 0), round(val, 0), lb, va_w, ps
+
+    except Exception as e:
+        logging.debug(f"calc_vp_score error: {e}")
+        return 0, 0.0, 0.0, 0.0, "error", 0.0, "error"
 
 
 # ── [B] Support/Resistance 점수 (0~10) ───────────────────────────────────────
 def calc_sr_score(df: pd.DataFrame) -> tuple:
     try:
-        close   = df["Close"].values
-        current = close[-1]
-
+        close, current = df["Close"].values, df["Close"].values[-1]
         if SCIPY_AVAILABLE:
             peaks, _ = find_peaks(-close, distance=SWING_DISTANCE, prominence=current * 0.01)
-            support_levels = close[peaks] if len(peaks) > 0 else np.array([])
+            sl = close[peaks] if len(peaks) > 0 else np.array([])
         else:
-            window = 5
-            local_min_idx = []
-            for i in range(window, len(close) - window):
-                if close[i] == min(close[i - window: i + window + 1]):
-                    local_min_idx.append(i)
-            support_levels = close[local_min_idx] if local_min_idx else np.array([])
+            sl = np.array([close[i] for i in range(5, len(close)-5) if close[i] == min(close[i-5:i+6])])
 
-        supports_below = support_levels[support_levels < current]
-        if len(supports_below) == 0:
-            return 0, 0.0, 0.0
-
-        nearest_support = supports_below.max()
-        gap_pct = (current - nearest_support) / nearest_support * 100
-
-        if gap_pct <= 2.0:    score = 10
-        elif gap_pct <= 5.0:  score = 7
-        elif gap_pct <= 10.0: score = 4
-        else:                 score = 1
-
-        return score, round(nearest_support, 0), round(gap_pct, 2)
+        sb = sl[sl < current]
+        if len(sb) == 0: return 0, 0.0, 0.0
+        ns  = sb.max()
+        gap = (current - ns) / ns * 100
+        sc  = 10 if gap <= 2 else 7 if gap <= 5 else 4 if gap <= 10 else 1
+        return sc, round(ns, 0), round(gap, 2)
     except Exception as e:
         logging.debug(f"sr_score error: {e}")
         return 0, 0.0, 0.0
 
 
-# ── [C] RSI 점수 (0~5) ──────────────────────────────────────────────────────
+# ── [C] RSI 점수 (0~5) ───────────────────────────────────────────────────────
 def calc_rsi(series: pd.Series, period: int = 14) -> float:
-    delta    = series.diff()
-    gain     = delta.clip(lower=0)
-    loss     = -delta.clip(upper=0)
-    avg_gain = gain.ewm(com=period - 1, min_periods=period).mean()
-    avg_loss = loss.ewm(com=period - 1, min_periods=period).mean()
-    rs       = avg_gain / avg_loss.replace(0, np.nan)
-    rsi      = 100 - (100 / (1 + rs))
+    delta = series.diff()
+    gain  = delta.clip(lower=0).ewm(com=period-1, min_periods=period).mean()
+    loss  = (-delta.clip(upper=0)).ewm(com=period-1, min_periods=period).mean()
+    rs    = gain / loss.replace(0, np.nan)
+    rsi   = 100 - (100 / (1 + rs))
     return round(float(rsi.iloc[-1]), 2) if not pd.isna(rsi.iloc[-1]) else 50.0
 
 def calc_rsi_score(rsi: float) -> int:
-    if rsi < 30: return 5
-    if rsi < 40: return 4
-    if rsi < 50: return 3
-    if rsi < 65: return 1
-    return 0
+    return 5 if rsi < 30 else 4 if rsi < 40 else 3 if rsi < 50 else 1 if rsi < 65 else 0
 
 
 # ── [D] MA 정배열 점수 (0~10) ────────────────────────────────────────────────
 def calc_ma_score(df: pd.DataFrame) -> tuple:
     try:
-        close = df["Close"]
-        ma5   = close.rolling(5).mean().iloc[-1]
-        ma20  = close.rolling(20).mean().iloc[-1]
-        ma60  = close.rolling(60).mean().iloc[-1]
-        ma120 = close.rolling(120).mean().iloc[-1] if len(close) >= 120 else None
-
-        if any(pd.isna(v) for v in [ma5, ma20, ma60]):
-            return 0, "insufficient"
-
-        if ma120 is not None and not pd.isna(ma120):
-            if ma5 > ma20 > ma60 > ma120: return 10, "full_bull"
-            if ma5 > ma20 > ma60:         return 7,  "3ma_bull"
-            if ma5 > ma20:                return 3,  "2ma_bull"
+        c = df["Close"]
+        m5, m20, m60 = c.rolling(5).mean().iloc[-1], c.rolling(20).mean().iloc[-1], c.rolling(60).mean().iloc[-1]
+        m120 = c.rolling(120).mean().iloc[-1] if len(c) >= 120 else None
+        if any(pd.isna(v) for v in [m5, m20, m60]): return 0, "insufficient"
+        if m120 is not None and not pd.isna(m120):
+            if m5 > m20 > m60 > m120: return 10, "full_bull"
+            if m5 > m20 > m60:        return 7,  "3ma_bull"
+            if m5 > m20:              return 3,  "2ma_bull"
         else:
-            if ma5 > ma20 > ma60: return 7, "3ma_bull"
-            if ma5 > ma20:        return 3, "2ma_bull"
-
+            if m5 > m20 > m60: return 7, "3ma_bull"
+            if m5 > m20:       return 3, "2ma_bull"
         return 0, "bearish"
     except Exception as e:
-        logging.debug(f"ma_score error: {e}")
-        return 0, "error"
+        logging.debug(f"ma_score error: {e}"); return 0, "error"
 
 
-# ── [E] Volume Gap Score (0~15) ★ v1.1 ──────────────────────────────────────
+# ── [E] Volume Gap Score (0~15) ──────────────────────────────────────────────
 def calc_volume_gap_score(df: pd.DataFrame) -> tuple:
     try:
-        close  = df["Close"].values
-        volume = df["Volume"].values
-        n      = len(close)
-
-        if n < 20:
-            return 0, 0.0, "insufficient"
-
-        price_20pct = np.percentile(close, VOL_GAP_BOTTOM_PCT * 100)
-        price_80pct = np.percentile(close, (1 - VOL_GAP_TOP_PCT) * 100)
-
-        bottom_mask = close <= price_20pct
-        top_mask    = close >= price_80pct
-
-        bottom_vol = volume[bottom_mask].mean() if bottom_mask.sum() > 0 else 0
-        top_vol    = volume[top_mask].mean()    if top_mask.sum() > 0    else 0
-
-        if bottom_vol == 0:
-            return 5, 0.0, "no_bottom_vol"
-
-        vol_gap_ratio = round(top_vol / bottom_vol, 2)
-
-        if vol_gap_ratio >= 4.0:   score, label = 0,  "sellout_strong"
-        elif vol_gap_ratio >= 3.0: score, label = 3,  "sellout_warn"
-        elif vol_gap_ratio >= 2.0: score, label = 7,  "neutral_high"
-        elif vol_gap_ratio >= 1.5: score, label = 10, "healthy_mid"
-        else:                      score, label = 15, "healthy_strong"
-
-        current  = close[-1]
-        base_pct = (current - price_20pct) / (price_80pct - price_20pct + 1e-9) * 100
-        if 0 <= base_pct <= 30 and score >= 10:
-            score = min(score + 2, 15)
-            label += "_accumulation"
-
-        return score, vol_gap_ratio, label
+        close, volume, n = df["Close"].values, df["Volume"].values, len(df)
+        if n < 20: return 0, 0.0, "insufficient"
+        p20  = np.percentile(close, VOL_GAP_BOTTOM_PCT * 100)
+        p80  = np.percentile(close, (1 - VOL_GAP_TOP_PCT) * 100)
+        bv   = volume[close <= p20].mean() if (close <= p20).sum() > 0 else 0
+        tv   = volume[close >= p80].mean() if (close >= p80).sum() > 0 else 0
+        if bv == 0: return 5, 0.0, "no_bottom_vol"
+        r = round(tv / bv, 2)
+        if r >= 4.0:   sc, lb = 0,  "sellout_strong"
+        elif r >= 3.0: sc, lb = 3,  "sellout_warn"
+        elif r >= 2.0: sc, lb = 7,  "neutral_high"
+        elif r >= 1.5: sc, lb = 10, "healthy_mid"
+        else:          sc, lb = 15, "healthy_strong"
+        bpct = (close[-1] - p20) / (p80 - p20 + 1e-9) * 100
+        if 0 <= bpct <= 30 and sc >= 10: sc = min(sc + 2, 15); lb += "_accumulation"
+        return sc, r, lb
     except Exception as e:
-        logging.debug(f"volume_gap_score error: {e}")
-        return 0, 0.0, "error"
+        logging.debug(f"vg_score error: {e}"); return 0, 0.0, "error"
 
 
-# ── [F] Standard Bar Score (0~10) ★ v1.1 ───────────────────────────────────
+# ── [F] Standard Bar Score (0~10) ────────────────────────────────────────────
 def calc_standard_bar_score(df: pd.DataFrame) -> tuple:
     try:
-        if len(df) < STD_BAR_BREAKOUT_WIN + STD_BAR_LOOKBACK + 5:
-            return 0, 0, -1
-
-        close  = df["Close"].values
-        open_  = df["Open"].values
-        volume = df["Volume"].values
-        high   = df["High"].values
-        n      = len(close)
-
-        vol_ma20 = pd.Series(volume).rolling(20).mean().values
-
-        best_score   = 0
-        best_cond    = 0
-        best_bar_idx = -1
-
-        for offset in range(STD_BAR_LOOKBACK):
-            i = n - 1 - offset
-            if i < STD_BAR_BREAKOUT_WIN + 5:
-                break
-
-            body_pct = (close[i] - open_[i]) / open_[i] if open_[i] > 0 else 0
-            cond1    = body_pct >= STD_BAR_BODY_PCT and close[i] > open_[i]
-
-            cond2_vol = vol_ma20[i] if not np.isnan(vol_ma20[i]) else 0
-            cond2     = volume[i] >= cond2_vol * STD_BAR_VOL_MULT if cond2_vol > 0 else False
-
-            ma5_val  = np.mean(close[i-4:i+1]) if i >= 4 else None
-            ma20_val = np.mean(close[i-19:i+1]) if i >= 19 else None
-            cond3    = (ma5_val is not None and ma20_val is not None
-                        and ma5_val > ma20_val)
-
-            prev_high = high[i - STD_BAR_BREAKOUT_WIN: i].max() if i >= STD_BAR_BREAKOUT_WIN else 0
-            cond4     = close[i] > prev_high if prev_high > 0 else False
-
-            conds_met = sum([cond1, cond2, cond3, cond4])
-
-            if conds_met > best_cond:
-                best_cond    = conds_met
-                best_bar_idx = offset
-                is_2nd_bar = (
-                    offset >= 1
-                    and close[n - offset] < close[n - offset - 1]
-                    and conds_met >= 3
-                )
-                if conds_met == 4:   best_score = 10 if is_2nd_bar else 8
-                elif conds_met == 3: best_score = 7  if is_2nd_bar else 6
-                elif conds_met == 2: best_score = 4
-                elif conds_met == 1: best_score = 2
-                else:                best_score = 0
-
-        return best_score, best_cond, best_bar_idx
+        if len(df) < STD_BAR_BREAKOUT_WIN + STD_BAR_LOOKBACK + 5: return 0, 0, -1
+        close, open_, volume, high = df["Close"].values, df["Open"].values, df["Volume"].values, df["High"].values
+        n = len(close)
+        vma20 = pd.Series(volume).rolling(20).mean().values
+        bs, bc, bi = 0, 0, -1
+        for off in range(STD_BAR_LOOKBACK):
+            i = n - 1 - off
+            if i < STD_BAR_BREAKOUT_WIN + 5: break
+            bp   = (close[i] - open_[i]) / open_[i] if open_[i] > 0 else 0
+            c1   = bp >= STD_BAR_BODY_PCT and close[i] > open_[i]
+            cv   = vma20[i] if not np.isnan(vma20[i]) else 0
+            c2   = volume[i] >= cv * STD_BAR_VOL_MULT if cv > 0 else False
+            m5v  = np.mean(close[i-4:i+1]) if i >= 4 else None
+            m20v = np.mean(close[i-19:i+1]) if i >= 19 else None
+            c3   = m5v is not None and m20v is not None and m5v > m20v
+            ph   = high[i-STD_BAR_BREAKOUT_WIN:i].max() if i >= STD_BAR_BREAKOUT_WIN else 0
+            c4   = close[i] > ph if ph > 0 else False
+            cm   = sum([c1, c2, c3, c4])
+            if cm > bc:
+                bc = cm; bi = off
+                is2 = off >= 1 and close[n-off] < close[n-off-1] and cm >= 3
+                if cm == 4:   bs = 10 if is2 else 8
+                elif cm == 3: bs = 7  if is2 else 6
+                elif cm == 2: bs = 4
+                elif cm == 1: bs = 2
+                else:         bs = 0
+        return bs, bc, bi
     except Exception as e:
-        logging.debug(f"standard_bar_score error: {e}")
-        return 0, 0, -1
+        logging.debug(f"sb_score error: {e}"); return 0, 0, -1
 
 
-# ── [G] Pullback Zone Score (0~10) ★ v1.2 ───────────────────────────────────
+# ── [G] Pullback Zone Score (0~10) ───────────────────────────────────────────
 def calc_pullback_zone_score(df: pd.DataFrame) -> tuple:
-    """
-    야베스 숏딥/턴딥 눌림목 탐지 (5조건 복합)
-    Returns: (score 0~10, pb_drop_pct, conditions_met, pb_label)
-    """
     try:
-        if len(df) < 25:
-            return 0, 0.0, 0, "insufficient"
-
-        close  = df["Close"].values
-        volume = df["Volume"].values
-        n      = len(close)
-
-        current = close[-1]
-
-        ma5  = pd.Series(close).rolling(5).mean().values
-        ma10 = pd.Series(close).rolling(10).mean().values
-        ma20 = pd.Series(close).rolling(20).mean().values
-
-        ma5_cur  = ma5[-1]
-        ma10_cur = ma10[-1]
-        ma20_cur = ma20[-1]
-
-        if pd.isna(ma5_cur) or pd.isna(ma10_cur) or pd.isna(ma20_cur):
-            return 0, 0.0, 0, "ma_insufficient"
-
-        lookback_window = min(PB_LOOKBACK_HIGH, n - 1)
-        recent_high = close[-lookback_window - 1: -1].max()
-
-        if recent_high <= 0:
-            return 0, 0.0, 0, "no_high"
-
-        pb_drop_pct = (recent_high - current) / recent_high * 100
-        cond1 = PB_DROP_MIN_PCT <= pb_drop_pct <= PB_DROP_MAX_PCT
-        cond2 = bool(ma5_cur > ma20_cur)
-
-        in_ma5_ma10  = min(ma5_cur, ma10_cur) <= current <= max(ma5_cur, ma10_cur)
-        in_ma10_ma20 = min(ma10_cur, ma20_cur) <= current <= max(ma10_cur, ma20_cur)
-        cond3 = in_ma5_ma10 or in_ma10_ma20
-
-        vol_5d  = np.mean(volume[-5:])  if n >= 5  else np.mean(volume)
-        vol_20d = np.mean(volume[-20:]) if n >= 20 else np.mean(volume)
-        cond4 = bool(vol_5d < vol_20d * PB_VOL_SHRINK_RATIO) if vol_20d > 0 else False
-
-        ma5_3d_ago = ma5[-4] if n >= 4 and not pd.isna(ma5[-4]) else ma5_cur
-        ma5_slope_pct = abs(ma5_cur - ma5_3d_ago) / (ma5_cur + 1e-9) * 100
-        cond5 = ma5_slope_pct < 2.0
-
-        conds_met = sum([cond1, cond2, cond3, cond4, cond5])
-
-        if not cond1:
-            label = "too_shallow" if pb_drop_pct < PB_DROP_MIN_PCT else "too_deep"
-            return 0, round(pb_drop_pct, 2), conds_met, label
-
-        if conds_met >= 5:   score, label = 10, "perfect_pullback"
-        elif conds_met == 4: score, label = 8,  "strong_pullback"
-        elif conds_met == 3: score, label = 6,  "mild_pullback"
-        elif conds_met == 2: score, label = 3,  "weak_pullback"
-        else:                score, label = 1,  "possible_pullback"
-
-        if in_ma5_ma10 and cond4 and score < 10:
-            score = min(score + 1, 10)
-            label += "_confirmed"
-
-        return score, round(pb_drop_pct, 2), conds_met, label
-
+        if len(df) < 25: return 0, 0.0, 0, "insufficient"
+        close, volume, n = df["Close"].values, df["Volume"].values, len(df)
+        cur  = close[-1]
+        m5   = pd.Series(close).rolling(5).mean().values
+        m10  = pd.Series(close).rolling(10).mean().values
+        m20  = pd.Series(close).rolling(20).mean().values
+        if any(pd.isna(x) for x in [m5[-1], m10[-1], m20[-1]]): return 0, 0.0, 0, "ma_insufficient"
+        rh   = close[-min(PB_LOOKBACK_HIGH, n-1)-1:-1].max()
+        if rh <= 0: return 0, 0.0, 0, "no_high"
+        drop = (rh - cur) / rh * 100
+        c1   = PB_DROP_MIN_PCT <= drop <= PB_DROP_MAX_PCT
+        c2   = bool(m5[-1] > m20[-1])
+        im5  = min(m5[-1], m10[-1]) <= cur <= max(m5[-1], m10[-1])
+        im10 = min(m10[-1], m20[-1]) <= cur <= max(m10[-1], m20[-1])
+        c3   = im5 or im10
+        v5   = np.mean(volume[-5:]) if n >= 5 else np.mean(volume)
+        v20  = np.mean(volume[-20:]) if n >= 20 else np.mean(volume)
+        c4   = bool(v5 < v20 * PB_VOL_SHRINK_RATIO) if v20 > 0 else False
+        ma5p = abs(m5[-1] - (m5[-4] if n >= 4 and not pd.isna(m5[-4]) else m5[-1])) / (m5[-1] + 1e-9) * 100
+        c5   = ma5p < 2.0
+        cm   = sum([c1, c2, c3, c4, c5])
+        if not c1:
+            return 0, round(drop, 2), cm, "too_shallow" if drop < PB_DROP_MIN_PCT else "too_deep"
+        if cm >= 5:   sc, lb = 10, "perfect_pullback"
+        elif cm == 4: sc, lb = 8,  "strong_pullback"
+        elif cm == 3: sc, lb = 6,  "mild_pullback"
+        elif cm == 2: sc, lb = 3,  "weak_pullback"
+        else:         sc, lb = 1,  "possible_pullback"
+        if im5 and c4 and sc < 10: sc = min(sc+1, 10); lb += "_confirmed"
+        return sc, round(drop, 2), cm, lb
     except Exception as e:
-        logging.debug(f"pullback_zone_score error: {e}")
-        return 0, 0.0, 0, "error"
+        logging.debug(f"pb_score error: {e}"); return 0, 0.0, 0, "error"
 
 
-# ── [H] Volume Surge Score (치량천) (0~10) ★ v1.3 BM-10 ────────────────────
+# ── [H] Volume Surge Score (BM-10) (0~10) ────────────────────────────────────
 def calc_volume_surge_score(df: pd.DataFrame) -> tuple:
-    """
-    [BM-10] 치량천: 당일 거래량 > 최근 20일 최대 거래량 * 1.5 AND 양봉
-      cond1: volume[-1] / max(volume[-21:-1]) >= 1.5
-      cond2: close[-1] > open[-1]  (양봉)
-    점수:
-      cond1+cond2: +10pt  (vol_surge_bull — 치량천 확정)
-      cond1 only:   +5pt  (vol_surge_bear — 거래량 급증, 방향 불확실)
-      미충족:         0pt  (normal)
-    """
     try:
-        if len(df) < 22:
-            return 0, 0.0, "insufficient"
-
-        close  = df["Close"].values
-        open_  = df["Open"].values
-        volume = df["Volume"].values
-
-        current_vol = volume[-1]
-        max_vol_20d = volume[-21:-1].max()
-
-        if max_vol_20d == 0:
-            return 0, 0.0, "no_volume"
-
-        vol_ratio = round(current_vol / max_vol_20d, 4)
-        cond1 = vol_ratio >= 1.5
-        cond2 = bool(close[-1] > open_[-1])
-
-        if cond1 and cond2:
-            return 10, vol_ratio, "vol_surge_bull"
-        elif cond1:
-            return 5,  vol_ratio, "vol_surge_bear"
-        else:
-            return 0,  vol_ratio, "normal"
-
+        if len(df) < 22: return 0, 0.0, "insufficient"
+        close, open_, volume = df["Close"].values, df["Open"].values, df["Volume"].values
+        cv  = volume[-1]
+        mv  = volume[-21:-1].max()
+        if mv == 0: return 0, 0.0, "no_volume"
+        r   = round(cv / mv, 4)
+        c1, c2 = r >= 1.5, bool(close[-1] > open_[-1])
+        if c1 and c2: return 10, r, "vol_surge_bull"
+        elif c1:      return 5,  r, "vol_surge_bear"
+        else:         return 0,  r, "normal"
     except Exception as e:
-        logging.debug(f"volume_surge_score error: {e}")
-        return 0, 0.0, "error"
+        logging.debug(f"vs_score error: {e}"); return 0, 0.0, "error"
 
 
-# ── [I] MA60 Direction Score (0~8) ★ v1.4 BM-2 ──────────────────────────────────
+# ── [I] MA60 Direction Score (BM-2) (0~8) ────────────────────────────────────
 def calc_ma60_direction_score(df: pd.DataFrame) -> tuple:
-    """
-    [BM-2] MA60 기울기 방향 예측: N봉 전 MA60 대비 현재 MA60 기울기(slope_pct) 계산
-      slope_pct >= +0.5% → score=8, label="MA60_RISING"      (강한 상승 추세)
-      slope_pct >= +0.1% → score=5, label="MA60_MILD_RISE"   (완만 상승)
-      slope_pct >= -0.1% → score=2, label="MA60_FLAT"        (수평 — 관망)
-      slope_pct <  -0.1% → score=0, label="MA60_DECLINING"   (하락)
-    Returns: (score 0~8, slope_pct, label)
-    """
     try:
-        min_len = 60 + MA60_DIR_LOOKBACK + 1
-        if len(df) < min_len:
-            return 0, 0.0, "insufficient"
-
-        close = df["Close"]
-        ma60_series = close.rolling(60).mean()
-
-        ma60_cur  = ma60_series.iloc[-1]
-        ma60_prev = ma60_series.iloc[-(MA60_DIR_LOOKBACK + 1)]
-
-        if pd.isna(ma60_cur) or pd.isna(ma60_prev) or ma60_prev == 0:
-            return 0, 0.0, "ma60_insufficient"
-
-        slope_pct = round((ma60_cur - ma60_prev) / ma60_prev * 100, 4)
-
-        if slope_pct >= MA60_DIR_RISING_STR:
-            return 8, slope_pct, "MA60_RISING"
-        elif slope_pct >= MA60_DIR_RISING_MILD:
-            return 5, slope_pct, "MA60_MILD_RISE"
-        elif slope_pct >= MA60_DIR_FLAT_LOW:
-            return 2, slope_pct, "MA60_FLAT"
-        else:
-            return 0, slope_pct, "MA60_DECLINING"
-
+        if len(df) < 60 + MA60_DIR_LOOKBACK + 1: return 0, 0.0, "insufficient"
+        ma60 = df["Close"].rolling(60).mean()
+        cur, prv = ma60.iloc[-1], ma60.iloc[-(MA60_DIR_LOOKBACK + 1)]
+        if pd.isna(cur) or pd.isna(prv) or prv == 0: return 0, 0.0, "ma60_insufficient"
+        sl = round((cur - prv) / prv * 100, 4)
+        if sl >= MA60_DIR_RISING_STR:   return 8, sl, "MA60_RISING"
+        elif sl >= MA60_DIR_RISING_MILD: return 5, sl, "MA60_MILD_RISE"
+        elif sl >= MA60_DIR_FLAT_LOW:    return 2, sl, "MA60_FLAT"
+        else:                            return 0, sl, "MA60_DECLINING"
     except Exception as e:
-        logging.debug(f"ma60_direction_score error: {e}")
-        return 0, 0.0, "error"
+        logging.debug(f"ma60_score error: {e}"); return 0, 0.0, "error"
 
 
-# ── OHLCV 취득 ──────────────────────────────────────────────────────────
-def fetch_ohlcv(ticker: str, end_date: datetime) -> pd.DataFrame | None:
+# ── [J] cap_trust_factor (P_NEW_2) ───────────────────────────────────────────
+def calc_cap_trust_factor(market_cap: float) -> float:
+    if not market_cap or market_cap <= 0: return 0.8
+    if market_cap >= 10000: return 1.0
+    elif market_cap >= 3000: return 0.9
+    elif market_cap >= 1000: return 0.8
+    else: return 0.7
+
+def get_market_cap(ticker: str, trade_date: str) -> float:
     try:
-        start = (end_date - timedelta(days=LOOKBACK_DAYS * 2)).strftime("%Y-%m-%d")
-        end   = end_date.strftime("%Y-%m-%d")
-        df    = fdr.DataReader(ticker, start, end)
-        if df is None or len(df) < 20:
-            return None
-        df = df.sort_index()
-        return df.tail(LOOKBACK_DAYS)
-    except Exception:
-        return None
+        import yfinance as yf
+        for sfx in [".KS", ".KQ"]:
+            info = yf.Ticker(ticker + sfx).fast_info
+            if hasattr(info, "market_cap") and info.market_cap:
+                return round(info.market_cap * 1350 / 1e8, 0)
+    except Exception: pass
+    return 0.0
 
 
-# ── 최근 거래일 탐색 ──────────────────────────────────────────────────────────
+# ── OHLCV 수집 / 최근 거래일 ─────────────────────────────────────────────────
+def fetch_ohlcv(ticker: str, end_date: datetime):
+    try:
+        s = (end_date - timedelta(days=LOOKBACK_DAYS * 2)).strftime("%Y-%m-%d")
+        e = end_date.strftime("%Y-%m-%d")
+        df = fdr.DataReader(ticker, s, e)
+        if df is None or len(df) < 20: return None
+        return df.sort_index().tail(LOOKBACK_DAYS)
+    except: return None
+
 def find_recent_trade_date() -> datetime:
     now = datetime.now()
     for i in range(7):
         d = now - timedelta(days=i)
-        if d.weekday() >= 5:
-            continue
+        if d.weekday() >= 5: continue
         try:
             ds = d.strftime("%Y-%m-%d")
             df = fdr.DataReader("005930", ds, ds)
-            if df is not None and len(df) > 0:
-                return d
-        except Exception:
-            pass
+            if df is not None and len(df) > 0: return d
+        except: pass
     return now
 
 
-# ── 종목별 분석 ───────────────────────────────────────────────────────────────
-def analyze_ticker(ticker: str, end_date: datetime) -> dict | None:
+# ── 종목 분석 ─────────────────────────────────────────────────────────────────
+def analyze_ticker(ticker: str, end_date: datetime):
     df = fetch_ohlcv(ticker, end_date)
-    if df is None:
-        return None
-
+    if df is None: return None
     try:
-        poc_score,  poc_price,     poc_pct              = calc_poc_score(df)
-        sr_score,   sr_support,    sr_gap                = calc_sr_score(df)
-        rsi_val                                           = calc_rsi(df["Close"])
-        rsi_score                                         = calc_rsi_score(rsi_val)
-        ma_score,   ma_label                              = calc_ma_score(df)
-        vg_score,   vol_gap_ratio, vg_label               = calc_volume_gap_score(df)
-        sb_score,   sb_conds,      sb_bar_idx = calc_standard_bar_score(df)
-        pb_score,   pb_drop_pct,   pb_conds,  pb_label    = calc_pullback_zone_score(df)
-        vs_score,   vol_surge_ratio, vs_label             = calc_volume_surge_score(df)  # ★ BM-10
-        ma60_dir_score, ma60_slope_pct, ma60_dir_label   = calc_ma60_direction_score(df)  # ★ BM-2
+        vp_score, poc_price, vah_price, val_price, vp_label, va_width_pct, vp_position = calc_vp_score(df)       # ★ BM-20
+        sr_score, sr_support, sr_gap        = calc_sr_score(df)
+        rsi_val                             = calc_rsi(df["Close"])
+        rsi_score                           = calc_rsi_score(rsi_val)
+        ma_score, ma_label                  = calc_ma_score(df)
+        vg_score, vol_gap_ratio, vg_label   = calc_volume_gap_score(df)
+        sb_score, sb_conds, sb_bar_idx      = calc_standard_bar_score(df)
+        pb_score, pb_drop_pct, pb_conds, pb_label = calc_pullback_zone_score(df)
+        vs_score, vol_surge_ratio, vs_label = calc_volume_surge_score(df)
+        ma60_sc, ma60_sl, ma60_lb           = calc_ma60_direction_score(df)
 
-        tech_detail_score = poc_score + sr_score + rsi_score + ma_score         # max 40
-        tech_total_score  = tech_detail_score + vg_score + sb_score + pb_score + vs_score + ma60_dir_score  # ★ max 93
+        market_cap  = get_market_cap(ticker, end_date.strftime("%Y%m%d"))
+        cap_trust   = calc_cap_trust_factor(market_cap)
+        vs_adj      = round(vs_score * cap_trust, 1)
+
+        detail = vp_score + sr_score + rsi_score + ma_score   # max 45
+        total  = detail + vg_score + sb_score + pb_score + vs_adj + ma60_sc  # max 98
 
         return {
             "ticker":              ticker.zfill(6),
-            # ── v1.0 컬럼 ──────────────────────────────────────────────────
-            "poc_score":           poc_score,
+            # ★ BM-20 컬럼
+            "vp_score":            vp_score,
             "poc_price":           poc_price,
-            "poc_pct":             poc_pct,
+            "vah_price":           vah_price,
+            "val_price":           val_price,
+            "vp_label":            vp_label,
+            "va_width_pct":        va_width_pct,
+            "vp_position":         vp_position,
+            # 기존 컬럼
             "sr_score":            sr_score,
             "sr_support":          sr_support,
             "sr_gap_pct":          sr_gap,
@@ -537,124 +447,93 @@ def analyze_ticker(ticker: str, end_date: datetime) -> dict | None:
             "rsi":                 rsi_val,
             "ma_score":            ma_score,
             "ma_label":            ma_label,
-            "tech_detail_score":   tech_detail_score,
-            # ── v1.1 컬럼 ──────────────────────────────────────────────────
+            "tech_detail_score":   detail,
             "vol_gap_score":       vg_score,
             "vol_gap_ratio":       vol_gap_ratio,
             "vol_gap_label":       vg_label,
             "std_bar_score":       sb_score,
             "std_bar_conds":       sb_conds,
             "std_bar_recency":     sb_bar_idx,
-            # ── v1.2 컬럼 ──────────────────────────────────────────────────
             "pullback_zone_score": pb_score,
             "pullback_drop_pct":   pb_drop_pct,
             "pullback_conds":      pb_conds,
             "pullback_label":      pb_label,
-            # ── v1.3 컬럼 [H] 치량천 BM-10 ★ ──────────────────────────────
             "vol_surge_score":     vs_score,
             "vol_surge_ratio":     vol_surge_ratio,
             "vol_surge_label":     vs_label,
-            # ── v1.4 신규 [I] MA60 Direction BM-2 ★ ──────────────────────────
-            "ma60_dir_score":      ma60_dir_score,
-            "ma60_slope_pct":      ma60_slope_pct,
-            "ma60_dir_label":      ma60_dir_label,
-            # ── 합산 ────────────────────────────────────────────────────────
-            "tech_total_score":    tech_total_score,
+            "ma60_dir_score":      ma60_sc,
+            "ma60_slope_pct":      ma60_sl,
+            "ma60_dir_label":      ma60_lb,
+            "market_cap_억":       market_cap,
+            "cap_trust_factor":    cap_trust,
+            "vol_surge_adj":       vs_adj,
+            "tech_total_score":    total,
         }
     except Exception as e:
-        logging.debug(f"analyze_ticker {ticker} error: {e}")
-        return None
+        logging.debug(f"analyze_ticker {ticker} error: {e}"); return None
 
 
-# ── MAIN ──────────────────────────────────────────────────────────────────────
+# ── MAIN ─────────────────────────────────────────────────────────────────────
 def main():
-    logging.info("=== sfd_technical_analyzer v1.4 START ===")
-    logging.info(f"BASE_DIR:  {BASE_DIR}")
-    logging.info(f"SCIPY:     {SCIPY_AVAILABLE}")
-    logging.info("SCORE MAX: v1.0=40pt / v1.1=65pt / v1.2=75pt / v1.3=85pt / v1.4 total=93pt (+MA60_DIR BM-2)")
+    logging.info("=== sfd_technical_analyzer v1.6 START ===")
+    logging.info(f"BASE_DIR: {BASE_DIR}")
+    logging.info(f"SCIPY:    {SCIPY_AVAILABLE}")
+    logging.info("SCORE MAX: v1.6=98pt (BM-20 vp_score 0~20pt / cap_trust 보정)")
+    logging.info(f"DXY_SYMBOL: {DXY_SYMBOL}")
 
     if not os.path.exists(INPUT_CSV):
-        logging.error(f"INPUT_CSV not found: {INPUT_CSV}")
-        sys.exit(1)
+        logging.error(f"INPUT_CSV not found: {INPUT_CSV}"); sys.exit(1)
 
-    input_df = pd.read_csv(INPUT_CSV, encoding="utf-8-sig", dtype=str)
-    # v1.5: ticker 컬럼명 유연 처리 (ticker / stock_code / 첫 번째 컬럼)
-    ticker_col = None
-    for _cand in ["ticker", "stock_code"]:
-        if _cand in input_df.columns:
-            ticker_col = _cand
-            break
-    if ticker_col is None:
-        ticker_col = input_df.columns[0]
-    logging.info(f"ticker_col: {ticker_col} | columns: {list(input_df.columns)}")
-    tickers  = (
-        input_df[ticker_col].dropna().astype(str)
-        .str.strip().str.zfill(6).unique().tolist()
+    tickers = (
+        pd.read_csv(INPUT_CSV, encoding="utf-8-sig", dtype={"ticker": str})["ticker"]
+        .dropna().astype(str).str.strip().str.zfill(6).unique().tolist()
     )
     logging.info(f"tickers: {len(tickers)}")
 
     end_date = find_recent_trade_date()
     logging.info(f"trade_date: {end_date.strftime('%Y%m%d')}")
 
-    results  = []
-    ok_cnt   = 0
-    fail_cnt = 0
-
+    results, ok_cnt, fail_cnt = [], 0, 0
     for i, ticker in enumerate(tickers):
         row = analyze_ticker(ticker, end_date)
-        if row:
-            results.append(row)
-            ok_cnt += 1
-        else:
-            fail_cnt += 1
-
+        if row: results.append(row); ok_cnt += 1
+        else:   fail_cnt += 1
         if (i + 1) % 50 == 0:
-            elapsed = int(time.time() - START_TIME)
-            logging.info(f"  progress: {i+1}/{len(tickers)} | ok={ok_cnt} fail={fail_cnt} | {elapsed}s")
+            logging.info(f"  progress: {i+1}/{len(tickers)} | ok={ok_cnt} fail={fail_cnt} | {int(time.time()-START_TIME)}s")
 
-    if not results:
-        logging.error("No results. Abort.")
-        sys.exit(1)
+    if not results: logging.error("No results. Abort."); sys.exit(1)
 
-    df_out = (
-        pd.DataFrame(results)
-        .sort_values("tech_total_score", ascending=False)
-        .reset_index(drop=True)
-    )
+    df_out = pd.DataFrame(results).sort_values("tech_total_score", ascending=False).reset_index(drop=True)
     df_out.to_csv(OUTPUT_CSV, index=False, encoding="utf-8-sig")
+    df_out.to_csv(os.path.join(HISTORY_DIR, f"sfd_technical_{end_date.strftime('%Y%m%d')}.csv"), index=False, encoding="utf-8-sig")
 
-    hist_path = os.path.join(
-        HISTORY_DIR,
-        f"sfd_technical_{end_date.strftime('%Y%m%d')}.csv"
-    )
-    df_out.to_csv(hist_path, index=False, encoding="utf-8-sig")
-
-    elapsed = int(time.time() - START_TIME)
-
-    ma60_rising = df_out[df_out["ma60_dir_label"] == "MA60_RISING"]
+    elapsed     = int(time.time() - START_TIME)
     pb_active   = df_out[df_out["pullback_zone_score"] >= 7]
     vs_active   = df_out[df_out["vol_surge_label"] == "vol_surge_bull"]
-    pb_list     = pb_active[["ticker", "pullback_zone_score", "pullback_label", "pullback_drop_pct"]].head(10).to_string(index=False)
-    vs_list     = vs_active[["ticker", "vol_surge_score", "vol_surge_ratio"]].head(10).to_string(index=False)
+    ma60_rising = df_out[df_out["ma60_dir_label"] == "MA60_RISING"]
+    cap_dist    = df_out["cap_trust_factor"].value_counts().to_dict()
+    vp_dist     = df_out["vp_position"].value_counts().to_dict()
 
-    top5 = df_out.head(5)[[
-        "ticker", "tech_total_score", "tech_detail_score",
-        "vol_gap_score", "std_bar_score", "pullback_zone_score", "vol_surge_score",
-        "ma60_dir_score", "ma60_dir_label", "ma_label", "pullback_label"
-    ]].to_string(index=False)
+    top5 = df_out.head(5)[["ticker","tech_total_score","tech_detail_score",
+        "vp_score","vp_position","vol_gap_score","std_bar_score",
+        "pullback_zone_score","vol_surge_adj","cap_trust_factor",
+        "ma60_dir_label","ma_label"]].to_string(index=False)
 
     logging.info(f"DONE | ok={ok_cnt} fail={fail_cnt} elapsed={elapsed}s")
     logging.info(f"TOP5:\n{top5}")
-    logging.info(f"PULLBACK(score>=7, {len(pb_active)}건):\n{pb_list}")
-    logging.info(f"[BM-10] 치량천 확정 ({len(vs_active)}건):\n{vs_list}")
-    logging.info(f"[BM-2] MA60_RISING: {len(ma60_rising)}건")
-    print(f"[OK] tech_analyzer v1.4 | ok={ok_cnt} | fail={fail_cnt} | elapsed={elapsed}s")
+    logging.info(f"PULLBACK(>=7, {len(pb_active)}종):\n{pb_active[['ticker','pullback_zone_score','pullback_label','pullback_drop_pct']].head(10).to_string(index=False)}")
+    logging.info(f"[BM-10] 치량천 ({len(vs_active)}종):\n{vs_active[['ticker','vol_surge_score','vol_surge_adj','vol_surge_ratio','cap_trust_factor']].head(10).to_string(index=False)}")
+    logging.info(f"[BM-2] MA60_RISING: {len(ma60_rising)}종")
+    logging.info(f"[BM-20] vp_position 분포: {vp_dist}")
+    logging.info(f"[P_NEW_2] cap_trust 분포: {cap_dist}")
+
+    print(f"[OK] tech_analyzer v1.6 | ok={ok_cnt} | fail={fail_cnt} | elapsed={elapsed}s")
     print(f"  -> {OUTPUT_CSV}")
-    print(f"  -> pullback_zone score>=7: {len(pb_active)}건")
-    print(f"  -> [BM-10] vol_surge_bull: {len(vs_active)}건")
-    print(f"  -> [BM-2] MA60_RISING: {len(ma60_rising)}건")
+    print(f"  -> [BM-20] above_vah:{vp_dist.get('above_vah',0)} near_vah:{vp_dist.get('near_vah',0)} in_va:{vp_dist.get('in_va',0)} at_poc:{vp_dist.get('at_poc',0)}")
+    print(f"  -> pullback_zone>=7: {len(pb_active)}종")
+    print(f"  -> [BM-10] vol_surge_bull: {len(vs_active)}종")
+    print(f"  -> [BM-2] MA60_RISING: {len(ma60_rising)}종")
 
 
 if __name__ == "__main__":
     main()
-

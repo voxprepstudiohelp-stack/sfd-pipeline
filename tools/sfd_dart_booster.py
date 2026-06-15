@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-sfd_dart_booster.py — BM-7 DART Disclosure Booster v1.1
+sfd_dart_booster.py — BM-7 DART Disclosure Booster v1.0
 Fetches recent DART filings and scores signal boost per ticker.
 
 Boost logic:
@@ -16,9 +16,6 @@ Boost logic:
   -3pt  : 불성실공시 / 조회공시 요구
   -2pt  : 소송 / 분쟁 공시
 
-Neutral (0pt) — matched before boost rules:
-   0pt  : 임원ㆍ주요주주 소유상황 보고서 (정례 공시, 매매 신호 아님)
-
 Inputs:  DART_API_KEY (env), outputs/latest/sfd_master_signal_latest.csv
 Outputs: outputs/latest/sfd_dart_boost_latest.csv
 
@@ -27,7 +24,7 @@ Usage:
   py tools/sfd_dart_booster.py --days 3  (last 3 days)
   py tools/sfd_dart_booster.py --mock    (offline test)
 
-Version: v1.1
+Version: v1.0
 Author:  Claude Sonnet 4.6 (2026-06-07)
 """
 
@@ -45,17 +42,6 @@ _LATEST = Path(_BASE) / "outputs" / "latest"
 SIGNAL_CSV   = _LATEST / "sfd_master_signal_latest.csv"
 OUTPUT_CSV   = _LATEST / "sfd_dart_boost_latest.csv"
 DART_API_KEY = os.environ.get("DART_API_KEY", "")
-
-# ── Neutral keywords: matched first, always return 0pt ───────────────────
-# 임원ㆍ주요주주 소유상황 보고서는 정례 공시(의무 제출)로 매매 신호가 아님.
-# "임원" 키워드가 BOOST_RULES +2pt 룰에 걸리지 않도록 우선 차단.
-NEUTRAL_KEYWORDS = [
-    "소유상황보고서",
-    "소유상황 보고서",
-    "임원ㆍ주요주주",
-    "임원·주요주주",
-    "주요주주특정증권",
-]
 
 # ── Boost rules: keyword -> score ────────────────────────────────────────
 BOOST_RULES = [
@@ -90,9 +76,6 @@ REPORT_PRIORITY = {
 
 def score_report(report_name: str) -> int:
     """Score a single DART report by matching boost rules."""
-    for nkw in NEUTRAL_KEYWORDS:
-        if nkw in report_name:
-            return 0, [f"{nkw}(neutral)"]
     total = 0
     matched = []
     for keywords, score in BOOST_RULES:
@@ -205,14 +188,14 @@ def print_report(rows: list):
     print("  " + "-"*60)
     for r in rows:
         boost = r["dart_boost"]
-        mark = "🔥" if boost >= 3 else ("⬇️" if boost <= -3 else "  ")
+        mark = "[HOT]" if boost >= 3 else ("[DN]" if boost <= -3 else "  ")
         print(f"  {r['ticker']:<8} {boost:>+6}  {r['report_count']:>6}  "
               f"{mark} {r['latest_report'][:35]}")
     print("="*65)
 
     pos = [r for r in rows if r["dart_boost"] > 0]
     neg = [r for r in rows if r["dart_boost"] < 0]
-    print(f"\n  Positive boost: {len(pos)}종목 | Negative boost: {len(neg)}종목")
+    print(f"\n  Positive boost: {len(pos)} tickers | Negative boost: {len(neg)} tickers")
     print()
 
 

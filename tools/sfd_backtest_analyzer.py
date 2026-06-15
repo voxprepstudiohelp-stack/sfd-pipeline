@@ -123,23 +123,52 @@ def build_paired_records(archive_dates: list[str]) -> pd.DataFrame:
       exit_close  = archive/D+1/sfd_prev_close.csv (next trading day close)
     Returns combined DataFrame with return_d1, win_flag columns.
     """
+    _HISTORY = _OUTPUTS / "history"
+
+    def _load_with_fallback(date: str, alias: str) -> tuple:
+        """Try archive first, then history. Returns (df_or_None, source_label)."""
+        arc = _ARCHIVE / date / "sfd_prev_close.csv"
+        df = load_close(arc, alias)
+        if df is not None:
+            return df, "archive"
+        hist = _HISTORY / f"sfd_prev_close_{date}.csv"
+        if hist.exists():
+            df = load_close(hist, alias)
+            return df, ("history" if df is not None else "history-unreadable")
+        return None, "missing"
+
     records = []
     for i, date_str in enumerate(archive_dates):
         signal_path = _ARCHIVE / date_str / "sfd_signal.csv"
-        entry_path  = _ARCHIVE / date_str / "sfd_prev_close.csv"
 
         signal_df = load_signal(signal_path)
-        entry_df  = load_close(entry_path, "close_entry")
+
+        entry_df, entry_src = _load_with_fallback(date_str, "close_entry")
+        if entry_src != "archive":
+            if entry_src == "history":
+                print(f"[ANALYZER] entry fallback OK  : {date_str} ← history")
+            else:
+                print(f"[ANALYZER] entry missing      : {date_str} ({entry_src})")
 
         if signal_df is None or signal_df.empty:
             continue
 
-        # Find exit close: next available archive date
+        # Find exit close: next available archive date (with history fallback)
         exit_df = None
         for j in range(i + 1, min(i + 5, len(archive_dates))):
-            exit_path = _ARCHIVE / archive_dates[j] / "sfd_prev_close.csv"
-            if exit_path.exists():
-                exit_df = load_close(exit_path, "close_exit")
+            next_date = archive_dates[j]
+            arc_exit = _ARCHIVE / next_date / "sfd_prev_close.csv"
+            if arc_exit.exists():
+                exit_df = load_close(arc_exit, "close_exit")
+                break
+            # archive file absent — try history fallback for this next_date
+            hist_exit = _HISTORY / f"sfd_prev_close_{next_date}.csv"
+            if hist_exit.exists():
+                exit_df = load_close(hist_exit, "close_exit")
+                if exit_df is not None:
+                    print(f"[ANALYZER] exit  fallback OK  : {date_str}→{next_date} ← history")
+                else:
+                    print(f"[ANALYZER] exit  fallback FAIL: {date_str}→{next_date}")
                 break
 
         # Also try latest file as exit for most recent date

@@ -69,10 +69,10 @@ BASE_MULTIPLIER = {
 }
 
 TIER_LABELS = {
-    (1.15, 99):  "🔥 SUPER",
-    (1.05, 1.15): "⬆️  STRONG",
-    (0.95, 1.05): "➡️  NEUTRAL",
-    (0.0,  0.95): "⬇️  WEAK",
+    (1.15, 99):  "[HOT] SUPER",
+    (1.05, 1.15): "[UP]  STRONG",
+    (0.95, 1.05): "[->]  NEUTRAL",
+    (0.0,  0.95): "[DN]  WEAK",
 }
 
 
@@ -80,7 +80,7 @@ def get_tier(score: float) -> str:
     for (lo, hi), label in TIER_LABELS.items():
         if lo <= score < hi:
             return label
-    return "➡️  NEUTRAL"
+    return "[->]  NEUTRAL"
 
 
 def fetch_etf_returns(days: int = 5) -> dict:
@@ -215,11 +215,11 @@ def print_report(results: list, kospi_ret: float, days: int):
     # Top 3 / Bottom 3 summary
     valid = [r for r in results if r['etf_return_pct'] is not None]
     if valid:
-        print("  🔥 TOP 3 강세 섹터:")
+        print("  [HOT] TOP 3 STRONG sectors:")
         for r in valid[:3]:
             print(f"     {r['sector']} ({r['etf_return_pct']:+.2f}% | x{r['dynamic_multiplier']})")
         print()
-        print("  ⬇️  BOTTOM 3 약세 섹터:")
+        print("  [DN]  BOTTOM 3 WEAK sectors:")
         for r in valid[-3:]:
             print(f"     {r['sector']} ({r['etf_return_pct']:+.2f}% | x{r['dynamic_multiplier']})")
     print()

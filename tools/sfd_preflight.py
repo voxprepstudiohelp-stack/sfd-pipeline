@@ -1,249 +1,251 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
-sfd_preflight.py — SFD Pipeline Preflight Check v1.0
+sfd_preflight.py
+SFD Pipeline Pre-Push Validation Gate
+Version: 2.2  (SEARCH_ROOTS 방식 - tools/ 서브폴더 포함 탐색)
+Date: 2026-06-09
 
-점검 항목:
-  [1] YML 문법   — .github/workflows/*.yml 파일별 'jobs:' 키 존재 확인
-  [2] 파이썬 파일 — tools/sfd_*.py 전수: 크기 STUB 경고 + py_compile 문법 검사
-  [3] 환경변수    — 필수 키가 .env 또는 os.environ에 존재하는지 확인
-  [4] 데이터 파일 — data/sfd_company_master... 및 portfolio.json 존재 확인
+실제 파일 구조:
+  SFC_DataPipeline/         ← PIPELINE_ROOT (로컬 작업, .env, outputs)
+    sfd_signal_aggregator.py
+    sfd_sector_injector.py
+    investor_flow_fetch.py
+    ...
+    tools/                  ← TOOLS_DIR (보조 모듈)
+    outputs/latest/
+    .env
 
-결과:
-  각 항목: [PASS] / [WARN] / [FAIL]
-  최종:    PREFLIGHT PASS (exit 0) 또는 PREFLIGHT FAIL (exit 1)
+  sfd-pipeline/             ← REPO_ROOT (git repo)
+    .github/workflows/sfd_daily.yml
+    sfd_signal_aggregator.py  (또는 pipeline 동기화)
+    ...
 
-Usage:
-  py tools/sfd_preflight.py
-  python tools/sfd_preflight.py
-
-Version: v1.0
-Author:  Claude Sonnet 4.6 (2026-06-07)
+검사 항목:
+  [ENV]   .env 필수 키 + APP_SECRET 줄바꿈
+  [FILE]  PIPELINE_ROOT 또는 REPO_ROOT 중 어느 쪽에든 존재하면 PASS
+  [TOOLS] tools/ 필수 파일
+  [DATA]  outputs/latest/ 디렉토리 (csv는 Run 전 없어도 WARNING)
+  [YAML]  sfd_daily.yml 존재 + outputs/latest copy step
+  [GIT]   불필요 파일 경고 (실패 아님)
 """
 
 import os
-import subprocess
 import sys
+import subprocess
 from pathlib import Path
 
-# ── 경로 설정 ─────────────────────────────────────────────────────────────
-_HERE   = Path(__file__).resolve().parent           # tools/
-_ROOT   = _HERE.parent                               # repo root
-_WF_DIR = _ROOT / ".github" / "workflows"
-_ENV    = _ROOT / ".env"
+PIPELINE_ROOT = Path(os.environ.get(
+    "SFD_PIPELINE",
+    r"D:\AI_WorkSpace\I_SFC\09_Implementation\SFC_DataPipeline"
+))
+REPO_ROOT = Path(os.environ.get(
+    "SFD_REPO",
+    r"D:\AI_WorkSpace\I_SFC\09_Implementation\sfd-pipeline"
+))
+ENV_PATH      = PIPELINE_ROOT / ".env"
+OUTPUT_LATEST = PIPELINE_ROOT / "outputs" / "latest"
+TOOLS_DIR     = PIPELINE_ROOT / "tools"
+YML_PATH      = REPO_ROOT / ".github" / "workflows" / "sfd_daily.yml"
 
-# SFD_BASE_DIR 대응 (Actions: /tmp/sfd, local: repo root)
-_SFD_BASE = Path(os.environ.get("SFD_BASE_DIR", str(_ROOT)))
-_DATA     = _SFD_BASE / "data"
-
-# ── 필수 환경변수 목록 ────────────────────────────────────────────────────
-REQUIRED_ENV_VARS = [
-    "DART_API_KEY",
-    "KIS_APP_KEY",
-    "KIS_APP_SECRET",
-    "KIS_ACCOUNT_NO",
-    "KIS_ACCT_PROD",
-    "GOOGLE_DRIVE_FOLDER_ID",
-    "NAVER_CLIENT_ID",
-    "NAVER_CLIENT_SECRET",
+# 탐색 루트: root + tools/ 서브폴더를 양쪽 repo 모두 포함
+SEARCH_ROOTS = [
+    PIPELINE_ROOT,
+    PIPELINE_ROOT / "tools",
+    REPO_ROOT,
+    REPO_ROOT / "tools",
 ]
 
-# ── 필수 데이터 파일 ──────────────────────────────────────────────────────
-REQUIRED_DATA_FILES = [
-    _ROOT / "data" / "sfd_company_master_v1.4_sector_filled.csv",
-    _ROOT / "portfolio.json",
+# tools/ 전용 탐색 루트 (REQUIRED_TOOL_FILES용)
+TOOL_SEARCH_ROOTS = [
+    PIPELINE_ROOT / "tools",
+    PIPELINE_ROOT,
+    REPO_ROOT / "tools",
+    REPO_ROOT,
 ]
 
-# ── 크기 임계값 (이하이면 STUB 경고) ─────────────────────────────────────
-STUB_SIZE_BYTES = 100
+# 핵심 파일: SEARCH_ROOTS 중 어디든 있으면 PASS
+REQUIRED_PY_FILES = [
+    "sfd_signal_aggregator.py",
+    "sfd_macro_radar.py",
+    "sfd_sector_injector.py",
+    "sfd_global_trigger.py",
+    "sfd_sector_strength.py",
+    "sfd_dart_booster.py",
+    "sfd_hoga_score.py",
+    "sfd_trade_guardian.py",
+    "sfd_backtest_d1.py",
+    "sfd_investor_flow_fetch.py",
+]
 
-# ── ANSI 색상 (터미널 미지원 시 공백) ────────────────────────────────────
-_USE_COLOR = sys.stdout.isatty() or os.environ.get("TERM", "") != ""
-GREEN  = "\033[32m" if _USE_COLOR else ""
-YELLOW = "\033[33m" if _USE_COLOR else ""
-RED    = "\033[31m" if _USE_COLOR else ""
-CYAN   = "\033[36m" if _USE_COLOR else ""
-RESET  = "\033[0m"  if _USE_COLOR else ""
+REQUIRED_TOOL_FILES = [
+    "sfd_candle_pattern.py",
+    "sfd_backtest_analyzer_v2.py",
+    "sfd_signal_quality.py",
+    "sfd_competitive_scan.py",
+    "sfd_threshold_optimizer.py",
+]
 
-_STATUS = {
-    "PASS": f"{GREEN}PASS{RESET}",
-    "WARN": f"{YELLOW}WARN{RESET}",
-    "FAIL": f"{RED}FAIL{RESET}",
-}
-COL_W = 56   # label column width
+REQUIRED_ENV_KEYS = ["KIS_APP_KEY", "KIS_APP_SECRET", "KIS_ACCOUNT_NO", "DART_API_KEY"]
 
+_results = []
+_fail = False
 
-def _row(label: str, status: str, detail: str = "") -> None:
-    detail_str = f"  ({detail})" if detail else ""
-    print(f"  {label:<{COL_W}} [{_STATUS[status]}]{detail_str}")
-
-
-# ── .env 파서 (python-dotenv 미필요) ─────────────────────────────────────
-def _load_dotenv(path: Path) -> dict:
-    env = {}
-    if not path.exists():
-        return env
-    try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, _, v = line.partition("=")
-                env[k.strip()] = v.strip()
-    except Exception:
-        pass
-    return env
-
-
-# ── [1] YML 문법 검증 ─────────────────────────────────────────────────────
-def check_yml() -> tuple:
-    print(f"\n{CYAN}[1] YML 파일 검증  (.github/workflows/){RESET}")
-    p = w = f = 0
-
-    if not _WF_DIR.exists():
-        _row(".github/workflows/ 디렉토리", "FAIL", "경로 없음")
-        return 0, 0, 1
-
-    ymls = sorted(_WF_DIR.glob("*.yml")) + sorted(_WF_DIR.glob("*.yaml"))
-    if not ymls:
-        _row(".github/workflows/ (yml 없음)", "WARN")
-        return 0, 1, 0
-
-    for yml in ymls:
-        try:
-            content = yml.read_text(encoding="utf-8", errors="replace")
-        except Exception as e:
-            _row(yml.name, "FAIL", f"읽기 오류: {e}")
-            f += 1
-            continue
-
-        has_jobs = any(ln.startswith("jobs:") for ln in content.splitlines())
-        if has_jobs:
-            _row(yml.name, "PASS")
-            p += 1
-        else:
-            _row(yml.name, "FAIL", "'jobs:' 키 없음")
-            f += 1
-
-    return p, w, f
-
-
-# ── [2] tools/sfd_*.py 전수 검증 ─────────────────────────────────────────
-def check_tools() -> tuple:
-    print(f"\n{CYAN}[2] tools/ sfd_*.py 파일 검증{RESET}")
-    p = w = f = 0
-
-    scripts = sorted(_HERE.glob("sfd_*.py"))
-    if not scripts:
-        _row("tools/sfd_*.py", "FAIL", "파일 없음")
-        return 0, 0, 1
-
-    print(f"  ({len(scripts)}개 파일 검사)")
-
-    for script in scripts:
-        name  = script.name
-        size  = script.stat().st_size
-
-        # STUB 크기 경고
-        if size <= STUB_SIZE_BYTES:
-            _row(f"tools/{name}", "WARN",
-                 f"STUB 의심 — {size}B ≤ {STUB_SIZE_BYTES}B")
-            w += 1
-            continue
-
-        # py_compile 문법 검사
-        result = subprocess.run(
-            [sys.executable, "-m", "py_compile", str(script)],
-            capture_output=True, text=True,
-        )
-        if result.returncode == 0:
-            _row(f"tools/{name}", "PASS")
-            p += 1
-        else:
-            stderr = result.stderr.strip()
-            last_line = stderr.splitlines()[-1] if stderr else "syntax error"
-            _row(f"tools/{name}", "FAIL", last_line)
-            f += 1
-
-    return p, w, f
-
-
-# ── [3] 필수 환경변수 확인 ────────────────────────────────────────────────
-def check_env() -> tuple:
-    print(f"\n{CYAN}[3] 필수 환경변수 확인{RESET}")
-    p = w = f = 0
-    dot_env = _load_dotenv(_ENV)
-
-    for var in REQUIRED_ENV_VARS:
-        in_os   = bool(os.environ.get(var, "").strip())
-        in_file = bool(dot_env.get(var, "").strip())
-
-        if in_os:
-            _row(var, "PASS", "os.environ")
-            p += 1
-        elif in_file:
-            _row(var, "PASS", ".env 파일")
-            p += 1
-        else:
-            # Actions Secret은 런타임에 주입되므로 로컬에 없어도 WARN (FAIL 아님)
-            _row(var, "WARN", ".env/os.environ 없음 -- Actions Secret 런타임 주입 확인")
-            w += 1
-
-    return p, w, f
-
-
-# ── [4] 필수 데이터 파일 확인 ─────────────────────────────────────────────
-def check_data() -> tuple:
-    print(f"\n{CYAN}[4] 필수 데이터 파일 확인{RESET}")
-    p = w = f = 0
-
-    for fpath in REQUIRED_DATA_FILES:
-        try:
-            rel = fpath.relative_to(_ROOT)
-        except ValueError:
-            rel = fpath
-        label = str(rel).replace("\\", "/")
-
-        if fpath.exists():
-            size_kb = fpath.stat().st_size // 1024
-            _row(label, "PASS", f"{size_kb} KB")
-            p += 1
-        else:
-            _row(label, "FAIL", "파일 없음")
-            f += 1
-
-    return p, w, f
-
-
-# ── 메인 ─────────────────────────────────────────────────────────────────
-def main():
-    print("=" * 65)
-    print("  SFD PREFLIGHT CHECK v1.0")
-    print("=" * 65)
-
-    total_p = total_w = total_f = 0
-
-    for fn in (check_yml, check_tools, check_env, check_data):
-        cp, cw, cf = fn()
-        total_p += cp
-        total_w += cw
-        total_f += cf
-
-    print()
-    print("=" * 65)
-    print(f"  결과 요약:  "
-          f"{GREEN}PASS {total_p}{RESET}  /  "
-          f"{YELLOW}WARN {total_w}{RESET}  /  "
-          f"{RED}FAIL {total_f}{RESET}")
-    print("=" * 65)
-
-    if total_f == 0:
-        print(f"  {GREEN}PREFLIGHT PASS{RESET}  -- 배포 진행 가능")
-        print("=" * 65)
-        sys.exit(0)
+def _check(label, ok, msg="", warn_only=False):
+    global _fail
+    if ok:
+        icon = "OK"
+    elif warn_only:
+        icon = "WW"  # warning
     else:
-        print(f"  {RED}PREFLIGHT FAIL{RESET}  -- FAIL {total_f}건 해결 후 재실행")
-        print("=" * 65)
+        icon = "XX"
+    line = f"  [{icon}] {label}"
+    if msg:
+        line += f"  ({msg})"
+    print(line)
+    _results.append({"label": label, "pass": ok or warn_only, "msg": msg})
+    if not ok and not warn_only:
+        _fail = True
+    return ok
+
+
+def check_env():
+    print("\n[ENV] .env file and required keys")
+    if not ENV_PATH.exists():
+        _check(".env exists", False, f"not found: {ENV_PATH}")
+        return
+    _check(".env exists", True)
+    lines = ENV_PATH.read_text(encoding="utf-8", errors="replace").splitlines()
+    for key in REQUIRED_ENV_KEYS:
+        _check(f"  {key}", any(l.startswith(f"{key}=") for l in lines))
+    sl = [l for l in lines if l.startswith("KIS_APP_SECRET=")]
+    if sl:
+        val = sl[0].split("=", 1)[1].strip()
+        ok = "\n" not in val and "\r" not in val and len(val) > 10
+        _check("  APP_SECRET no newline", ok, "OK" if ok else "re-enter required")
+
+
+def check_python_files():
+    """SEARCH_ROOTS 중 어느 경로에 있어도 PASS"""
+    print("\n[FILE] Core Python files (pipeline/repo/tools subfolder included)")
+    for fname in REQUIRED_PY_FILES:
+        found_in = next((r for r in SEARCH_ROOTS if (r / fname).exists()), None)
+        ok = found_in is not None
+        if ok:
+            try:
+                loc = str(found_in.relative_to(PIPELINE_ROOT.parent)).replace("\\", "/")
+            except ValueError:
+                loc = str(found_in)
+        else:
+            loc = "NOT FOUND"
+        _check(fname, ok, loc)
+
+
+def check_tool_files():
+    print("\n[TOOLS] tools/ required files (searching both pipeline/repo)")
+    for fname in REQUIRED_TOOL_FILES:
+        found_in = next((r for r in TOOL_SEARCH_ROOTS if (r / fname).exists()), None)
+        ok = found_in is not None
+        if ok:
+            try:
+                loc = str(found_in.relative_to(PIPELINE_ROOT.parent)).replace("\\", "/")
+            except ValueError:
+                loc = str(found_in)
+        else:
+            loc = "NOT FOUND"
+        _check(fname, ok, loc)
+    # BM-14 구문 검사
+    bm14 = next((r / "sfd_candle_pattern.py" for r in TOOL_SEARCH_ROOTS
+                  if (r / "sfd_candle_pattern.py").exists()), None)
+    if bm14 is not None and bm14.exists():
+        try:
+            import ast
+            ast.parse(bm14.read_text(encoding="utf-8"))
+            _check("sfd_candle_pattern.py syntax", True)
+        except SyntaxError as e:
+            _check("sfd_candle_pattern.py syntax", False, str(e))
+
+
+def check_output_dir():
+    """outputs/latest/ 디렉토리만 확인. CSV는 Run 전에 없어도 WARNING"""
+    print("\n[DATA] outputs/latest/ directory")
+    if not OUTPUT_LATEST.exists():
+        _check("outputs/latest/ directory", False, f"missing: {OUTPUT_LATEST}")
+        return
+    _check("outputs/latest/ directory", True)
+    # signal_input.csv: Run 전 없어도 WARNING (FAIL 아님)
+    csv_ok = (OUTPUT_LATEST / "signal_input.csv").exists()
+    _check("  signal_input.csv", csv_ok,
+           "exists" if csv_ok else "normal before Run (WARN only)",
+           warn_only=not csv_ok)
+
+
+def check_yaml():
+    print("\n[YAML] sfd_daily.yml")
+    if not YML_PATH.exists():
+        _check("sfd_daily.yml", False, f"missing: {YML_PATH}")
+        return
+    _check("sfd_daily.yml", True)
+    content = YML_PATH.read_text(encoding="utf-8", errors="replace")
+    _check("  outputs/latest copy step", "outputs/latest" in content)
+    # on.push 는 없어도 WARNING (schedule 기반 yml이면 정상)
+    has_push = "push" in content
+    _check("  on.push trigger", has_push,
+           "exists" if has_push else "schedule-based yml - OK",
+           warn_only=not has_push)
+
+
+def check_git_junk():
+    """cd/copy/git 등 잘못된 파일이 repo에 있는지 경고"""
+    print("\n[GIT] checking for unnecessary files in repo")
+    junk_names = {"cd", "copy", "git", "dir", "ls"}
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=10
+        )
+        lines  = result.stdout.strip().splitlines()
+        dirty  = [l for l in lines if l.strip()]
+        junks  = [l for l in dirty if any(
+            Path(l[3:].strip()).name.lower() in junk_names for _ in [1]
+        )]
+        if junks:
+            print(f"  [WW] unnecessary files detected - recommend deletion:")
+            for j in junks:
+                print(f"    {j}")
+        elif dirty:
+            print(f"  [WW] uncommitted {len(dirty)} files (review before deploy)")
+        else:
+            print("  [OK] working tree clean")
+    except Exception as e:
+        print(f"  [WW] git check skipped ({e})")
+
+
+def main():
+    print("=" * 55)
+    print("SFD Preflight v2.2")
+    print(f"pipeline: {PIPELINE_ROOT}")
+    print(f"repo    : {REPO_ROOT}")
+    print("=" * 55)
+
+    check_env()
+    check_python_files()
+    check_tool_files()
+    check_output_dir()
+    check_yaml()
+    check_git_junk()
+
+    total  = len(_results)
+    passed = sum(1 for r in _results if r["pass"])
+    failed = total - passed
+
+    print("\n" + "=" * 55)
+    print(f"RESULT: {passed}/{total} PASS  |  {failed} FAIL")
+    if _fail:
+        print("PREFLIGHT FAILED - fix the above items before push")
         sys.exit(1)
+    else:
+        print("ALL PASS - ready to push")
+        print("  next: .\\scripts\\run93_deploy.ps1")
+        sys.exit(0)
 
 
 if __name__ == "__main__":

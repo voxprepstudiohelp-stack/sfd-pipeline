@@ -46,7 +46,7 @@ def run(layer: str, script: str, args: list) -> str:
     """Returns: 'OK' | 'SKIP' | 'FAIL'"""
     path = TOOLS / script
     if not path.exists():
-        msg = f"[SKIP] {layer} | {script} 파일 없음: {path}"
+        msg = f"[SKIP] {layer} | {script} file not found: {path}"
         print(msg); logging.warning(msg)
         return "SKIP"
 
@@ -68,7 +68,7 @@ def run(layer: str, script: str, args: list) -> str:
 
 def main() -> None:
     start  = datetime.now()
-    header = f"=== SFD Pipeline v0.7 시작 === {start.strftime('%Y-%m-%d %H:%M:%S')}"
+    header = f"=== SFD Pipeline v0.7 START === {start.strftime('%Y-%m-%d %H:%M:%S')}"
     print(header); logging.info(header)
 
     results: dict[str, str] = {}
@@ -82,7 +82,7 @@ def main() -> None:
 
     sep = "=" * 60
     print(f"\n{sep}")
-    print(f"[DONE] OK={len(ok_list)} | SKIP={len(skip_list)} | FAIL={len(fail_list)} | 경과={elapsed}s")
+    print(f"[DONE] OK={len(ok_list)} | SKIP={len(skip_list)} | FAIL={len(fail_list)} | elapsed={elapsed}s")
     if skip_list: print(f"  SKIP: {', '.join(skip_list)}")
     if fail_list: print(f"  FAIL: {', '.join(fail_list)}")
     print(f"  LOG: {LOG_PATH}")
