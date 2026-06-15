@@ -155,6 +155,10 @@ jobs:
         run: python sfd_trade_guardian.py
         continue-on-error: true
 
+      - name: Layer 7 -- market_rank (S7)
+        run: python tools/sfd_market_rank.py
+        continue-on-error: true
+
       - name: Upload latest to Drive
         run: python utils/gdrive_uploader.py
         continue-on-error: true
