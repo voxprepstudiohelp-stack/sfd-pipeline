@@ -55,6 +55,10 @@ except ImportError as _e:
     BM_NEW_AVAILABLE = False
     _BM_IMPORT_ERR   = str(_e)
 
+# [TEMP v4.1.2] BM-NEW 강제 OFF — fetch_ohlcv_for_bm 티커당 fdr 개별호출로 Pass1/Pass3 각 +46~92분, timeout 120분 초과 방지. OHLCV 스토어 구현 후 해제.
+BM_NEW_AVAILABLE = False
+_BM_IMPORT_ERR   = "TEMP_DISABLED: per-ticker fdr OHLCV (timeout guard)"
+
 # ── Path config ───────────────────────────────────────────────────────────────
 _env_base = os.environ.get("SFD_BASE_DIR", "")
 if _env_base and os.path.isdir(_env_base):
