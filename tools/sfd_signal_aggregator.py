@@ -749,7 +749,7 @@ def main():
             "BM_3HIT":    hit3_result["score_delta"],
             "BM_AF_TRAP": aftrap_result["score_delta"],
         }
-        bm_gated      = apply_waist_gate(bm_raw, waist_result)
+        bm_gated      = apply_waist_gate(bm_raw, waist_result) if BM_NEW_AVAILABLE else dict(bm_raw)  # [v4.1.1] BM_NEW 미가용 시 gate 우회
         bm_3hit_score   = bm_gated.get("BM_3HIT",    0)
         bm_aftrap_score = bm_gated.get("BM_AF_TRAP", 0)
 
