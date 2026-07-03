@@ -74,7 +74,7 @@ jobs:
 
       - name: Make signal_input from prev_close
         run: |
-          cp /tmp/sfd/outputs/latest/sfd_prev_close_latest.csv /tmp/sfd/inputs/sfd_master_signal_input.csv || true
+          cp /tmp/sfd/outputs/latest/sfd_prev_close_latest.csv /tmp/sfd/inputs/sfd_master_signal_input.csv || cp inputs/sfd_master_signal_input.csv /tmp/sfd/inputs/sfd_master_signal_input.csv
           echo "[OK] sfd_master_signal_input.csv ready"
           ls -la /tmp/sfd/inputs/
 
