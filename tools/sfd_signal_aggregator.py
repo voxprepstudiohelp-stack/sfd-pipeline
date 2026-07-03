@@ -39,6 +39,7 @@ import csv
 import json
 import time
 import logging
+import sqlite3
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -54,10 +55,6 @@ try:
 except ImportError as _e:
     BM_NEW_AVAILABLE = False
     _BM_IMPORT_ERR   = str(_e)
-
-# [TEMP v4.1.2] BM-NEW 강제 OFF — fetch_ohlcv_for_bm 티커당 fdr 개별호출로 Pass1/Pass3 각 +46~92분, timeout 120분 초과 방지. OHLCV 스토어 구현 후 해제.
-BM_NEW_AVAILABLE = False
-_BM_IMPORT_ERR   = "TEMP_DISABLED: per-ticker fdr OHLCV (timeout guard)"
 
 # ── Path config ───────────────────────────────────────────────────────────────
 _env_base = os.environ.get("SFD_BASE_DIR", "")
@@ -111,7 +108,7 @@ TOP_VALUE_PCT    = 0.20
 FUND_MAX_PT      = 15
 
 THRESHOLD_RESERVE = 85  # v4.1-fix
-THRESHOLD_WATCH   = 70
+THRESHOLD_WATCH   = 63
 MODE = "ORIGINAL"
 
 # [BM-3] Bias Filter (기존 — v4.1에서 BM-WAIST와 병존)
@@ -181,8 +178,37 @@ def get_technical_data(ticker, end_date):
         return None
 
 
-def fetch_ohlcv_for_bm(ticker, end_date) -> pd.DataFrame | None:
-    """[v4.1] BM-WAIST/3HIT/AFTRAP용 OHLCV DataFrame 조회."""
+def fetch_ohlcv_for_bm(ticker, end_date, db_conn=None) -> pd.DataFrame | None:
+    """[v4.1] BM-WAIST/3HIT/AFTRAP용 OHLCV DataFrame 조회.
+
+    db_conn (sqlite3.Connection | None):
+        - None (default): 기존 fdr.DataReader fallback 경로 그대로.
+        - sqlite3.Connection: outputs/latest/ohlcv.db의 ohlcv_daily 테이블에서
+          해당 ticker를 읽어 DataFrame으로 반환. 40행 미만이면 None.
+    """
+    # ── 1) DB 경로: 캐시가 있으면 우선 사용 ─────────────────────────────────────
+    if db_conn is not None:
+        try:
+            q = (
+                "SELECT date, open, high, low, close, volume "
+                "FROM ohlcv_daily WHERE ticker = ? ORDER BY date ASC"
+            )
+            df = pd.read_sql_query(q, db_conn, params=(ticker,))
+            if df is None or len(df) < 40:
+                logging.debug(f"[OHLCV-DB] {ticker}: rows={0 if df is None else len(df)} (<40) → None")
+                return None
+            df["date"] = pd.to_datetime(df["date"])
+            df = df.set_index("date").sort_index()
+            # 필수 컬럼 확인
+            for col in ["close", "high", "low", "volume"]:
+                if col not in df.columns:
+                    return None
+            return df
+        except Exception as _e:
+            logging.debug(f"[OHLCV-DB] {ticker}: read failed — fallback to FDR ({_e})")
+            # DB read 실패 시 아래 FDR 경로로 계속 진행 (graceful)
+
+    # ── 2) FDR fallback (기존 동작 그대로 보존) ─────────────────────────────
     try:
         end   = datetime.strptime(end_date, "%Y%m%d")
         start = (end - timedelta(days=BM_OHLCV_DAYS)).strftime("%Y-%m-%d")
@@ -586,6 +612,19 @@ def main():
     logging.info(f"THRESHOLD:  RESERVE={THRESHOLD_RESERVE} WATCH={THRESHOLD_WATCH}")
     logging.info(f"[BM-13] Signal Timeout: {TIMEOUT_BARS}bars | targets: {TIMEOUT_SIGNALS}")
 
+    # ── [v4.1-P1] OHLCV cache DB (outputs/latest/ohlcv.db) ──────────────────
+    OHLCV_DB_PATH = os.path.join(LATEST_DIR, "ohlcv.db")
+    db_conn = None
+    if os.path.exists(OHLCV_DB_PATH):
+        try:
+            db_conn = sqlite3.connect(OHLCV_DB_PATH)
+            logging.info(f"[OHLCV-DB] connected: {OHLCV_DB_PATH}")
+        except Exception as _db_e:
+            logging.warning(f"[OHLCV-DB] connect failed — FDR fallback only: {_db_e}")
+            db_conn = None
+    else:
+        logging.info(f"[OHLCV-DB] not found: {OHLCV_DB_PATH} — FDR fallback only")
+
     if BM_NEW_AVAILABLE:
         logging.info("[v4.1] BM-WAIST / BM-3HIT / BM-AFTRAP: ENABLED")
     else:
@@ -739,7 +778,7 @@ def main():
 
         if BM_NEW_AVAILABLE:
             try:
-                ohlcv_df = fetch_ohlcv_for_bm(ticker, trade_date)
+                ohlcv_df = fetch_ohlcv_for_bm(ticker, trade_date, db_conn=db_conn)
                 if ohlcv_df is not None:
                     waist_result  = compute_waist_bias(ohlcv_df)
                     waist_bias    = waist_result["bias"]
@@ -753,7 +792,7 @@ def main():
             "BM_3HIT":    hit3_result["score_delta"],
             "BM_AF_TRAP": aftrap_result["score_delta"],
         }
-        bm_gated      = apply_waist_gate(bm_raw, waist_result) if BM_NEW_AVAILABLE else dict(bm_raw)  # [v4.1.1] BM_NEW 미가용 시 gate 우회
+        bm_gated      = apply_waist_gate(bm_raw, waist_result)
         bm_3hit_score   = bm_gated.get("BM_3HIT",    0)
         bm_aftrap_score = bm_gated.get("BM_AF_TRAP", 0)
 
@@ -878,6 +917,14 @@ def main():
         f"[v4.1] 3HIT={bm3hit_ct} AFTRAP={aftrap_ct} "
         f"WAIST_BLOCK={waist_blk_ct} GUARDIAN_WARN={gw_ct} ==="
     )
+
+    # ── [v4.1-P1] OHLCV cache DB close ─────────────────────────────────────
+    if db_conn is not None:
+        try:
+            db_conn.close()
+            logging.info(f"[OHLCV-DB] closed")
+        except Exception as _db_close_e:
+            logging.warning(f"[OHLCV-DB] close failed: {_db_close_e}")
 
 
 if __name__ == "__main__":
