@@ -1,6 +1,11 @@
-
+﻿
 inputs/
+!inputs/sfd_master_signal_input.csv
 outputs/
 tools/__pycache__/
 
 tools/fix_*.py
+
+.credentials/
+token_backup.json
+*.db
