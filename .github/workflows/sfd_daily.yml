@@ -1,11 +1,11 @@
-name: SFD Daily Pipeline
+﻿name: SFD Daily Pipeline
 # sfd-pipeline/.github/workflows/sfd_daily.yml
 # V10.6 | 2026-07-02 | Claude
 #
 # [V10.5 -> V10.6] fix: signal_input cp source = outputs/latest/sfd_prev_close_latest.csv (ticker full columns). old inputs/sfd_prev_close_input.csv had only stock_code, causing L2.7 KeyError ticker
 #
 # [V10.2 -> V10.5 changes]
-# - Layer 5.2: sfd_add_buy_v2.py 추가 (조정 매집 신호)
+# - Layer 5.2: sfd_add_buy_v2.py 異붽? (議곗젙 留ㅼ쭛 ?좏샇)
 
 on:
   schedule:
@@ -76,6 +76,10 @@ jobs:
           cp /tmp/sfd/outputs/latest/sfd_prev_close_latest.csv /tmp/sfd/inputs/sfd_master_signal_input.csv || true
           echo "[OK] sfd_master_signal_input.csv ready"
           ls -la /tmp/sfd/inputs/
+
+      - name: Layer 1 -- ohlcv_store (pre-fetch)
+        run: python tools/sfd_ohlcv_store.py
+        continue-on-error: true
 
       - name: Layer 1.5 -- news_fetcher
         run: python tools/sfd_news_fetcher.py
