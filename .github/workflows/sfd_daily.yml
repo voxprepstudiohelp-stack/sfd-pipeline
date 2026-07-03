@@ -145,6 +145,10 @@ jobs:
       - name: "Layer 2 Pass3 -- signal_aggregator (final with fund+investor)"
         run: python tools/sfd_signal_aggregator.py
 
+      - name: Layer 3 -- surge_top20 (S3)
+        run: python -X utf8 tools/sfd_surge_top20.py
+        continue-on-error: true
+
       - name: Layer 3 -- backtest_d1
         run: python tools/sfd_backtest_d1.py
         continue-on-error: true
