@@ -1,15 +1,13 @@
-
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Layer -2: SFD MACRO RADAR v1.2
+Layer -2: SFD MACRO RADAR v1.3
 ===============================
-[v1.1 → v1.2 변경사항] P_NEW_3
-- classify_macro(m_score) 추가: bull / neutral / bear 3단계 분류
-- REGIME_MULTIPLIER: bear 시 신호 차단 (×0.0), bull 시 확대 (×1.2)
-- regime + m_score CSV/JSON 출력 추가
-- 백테스트 근거: 2022 bear 구간 적중률 39.1% → bear 차단으로 손실 방어
-작성: Claude (SFD 메인 아키텍트) | 2026.06.14
+[v1.2 → v1.3 변경사항]
+- DXY 티커 수정: "DXY=F" → "DX-Y.NYB"  (ICE 달러인덱스 현물, yfinance 안정 티커)
+  근거: DXY=F는 yfinance에서 데이터 공백 빈번 → DX-Y.NYB로 교체
+- MultiIndex 처리 시 ticker 키 DX-Y.NYB 반영 (하이픈 포함 티커 안전 처리)
+작성: Claude (SFD 메인 아키텍트) | 2026.07.03
 """
 
 import os
@@ -52,17 +50,17 @@ logger = logging.getLogger(__name__)
 
 # ===== MACRO INDICATORS =====
 INDICATORS = {
-    "DXY":      "DXY=F",      # 달러 인덱스
-    "GOLD":     "GC=F",       # 금 선물
-    "OIL":      "CL=F",       # WTI 유가
-    "COPPER":   "HG=F",       # 구리 선물
-    "LIT":      "LIT",        # 리튬 ETF
-    "BTC":      "BTC-USD",    # 비트코인
-    "VIX":      "^VIX",       # 공포지수
+    "DXY":      "DX-Y.NYB",   # 달러 인덱스 [v1.3: DXY=F → DX-Y.NYB]
+    "GOLD":     "GC=F",        # 금 선물
+    "OIL":      "CL=F",        # WTI 유가
+    "COPPER":   "HG=F",        # 구리 선물
+    "LIT":      "LIT",         # 리튬 ETF
+    "BTC":      "BTC-USD",     # 비트코인
+    "VIX":      "^VIX",        # 공포지수
     "JPY":      "USDJPY=X",   # USD/JPY
     "CNY":      "USDCNY=X",   # USD/CNY
     "KRW":      "USDKRW=X",   # USD/KRW
-    "FED_RATE": "^IRX",       # Fed Funds Rate (3M Treasury)
+    "FED_RATE": "^IRX",        # Fed Funds Rate (3M Treasury)
 }
 
 # ===== 섹터별 매크로 감도 맵 =====
@@ -102,18 +100,14 @@ SECTOR_MACRO_MAP = {
         "OIL_spike": 8,   "COPPER_spike": 15,
         "BTC_rally": 6,   "VIX_fear": -10,
     },
-    "POWER_INFRA": {    # LS·두산에너빌리티·한전기술 대응 (신규)
+    "POWER_INFRA": {  # LS·두산에너빌리티·한전기술 대응
         "DXY_strong": 6,  "DXY_weak": -5,
         "OIL_spike": 8,   "COPPER_spike": 10,
         "BTC_rally": 3,   "VIX_fear": -8,
     },
 }
 
-# ===== [v1.2 신규] REGIME 분류 =====
-# 백테스트 근거 (2020~2024 28,537건):
-#   bull(2020):    적중률 62.5%, 평균수익 +5.38%
-#   neutral(2021~): 적중률 ~46%,  평균수익 ~0%
-#   bear(2022):    적중률 39.1%, 평균수익 -2.52%
+# ===== [v1.2] REGIME 분류 =====
 REGIME_MULTIPLIER = {
     "bull":    1.2,   # 포지션 확대 허용
     "neutral": 1.0,   # 기본 운용
@@ -121,10 +115,6 @@ REGIME_MULTIPLIER = {
 }
 
 def classify_macro(m_score: float) -> str:
-    """
-    m_score (macro_boost 전체 합산) → bull / neutral / bear
-    기준값: 백테스트 2020 bull(+) vs 2022 bear(-) 구간 경험치
-    """
     if m_score >= 5:
         return "bull"
     elif m_score <= -5:
@@ -133,7 +123,6 @@ def classify_macro(m_score: float) -> str:
         return "neutral"
 
 def get_regime_action(regime: str) -> str:
-    """regime별 운용 지침 반환"""
     actions = {
         "bull":    "FULL_OPERATION  | 포지션 확대 허용 (×1.2)",
         "neutral": "NORMAL_OPERATION| 기본 운용",
@@ -144,7 +133,10 @@ def get_regime_action(regime: str) -> str:
 
 # ===== FETCH MACROS =====
 def fetch_macro_indicators(lookback_days=5):
-    """매크로 지표 수집 (yfinance) — v1.1 MultiIndex 처리 유지"""
+    """
+    매크로 지표 수집 (yfinance)
+    [v1.3] DX-Y.NYB 하이픈 포함 티커 MultiIndex 안전 처리
+    """
     logger.info("Fetching macro indicators from yfinance...")
     macros = {}
     end_date   = datetime.now()
@@ -157,13 +149,20 @@ def fetch_macro_indicators(lookback_days=5):
                 logger.warning(f"No data for {key} ({ticker})")
                 continue
 
-            # MultiIndex 처리
+            # [v1.3] MultiIndex 처리 — DX-Y.NYB 같은 특수문자 티커 포함
             close_col = None
             if isinstance(data.columns, pd.MultiIndex):
-                if "Close" in data.columns.get_level_values(0):
-                    close_col = ("Close", ticker)
-                elif "Adj Close" in data.columns.get_level_values(0):
-                    close_col = ("Adj Close", ticker)
+                level0 = data.columns.get_level_values(0)
+                level1 = data.columns.get_level_values(1)
+                for col_type in ["Close", "Adj Close"]:
+                    if col_type in level0:
+                        if ticker in level1:
+                            close_col = (col_type, ticker)
+                        else:
+                            matching = [(c0, c1) for c0, c1 in data.columns if c0 == col_type]
+                            if matching:
+                                close_col = matching[0]
+                        break
             else:
                 if "Close" in data.columns:
                     close_col = "Close"
@@ -171,11 +170,12 @@ def fetch_macro_indicators(lookback_days=5):
                     close_col = "Adj Close"
 
             if close_col is None:
-                logger.warning(f"No Close column for {key}")
+                logger.warning(f"No Close column for {key} ({ticker})")
                 continue
 
             close_series = data[close_col].dropna()
             if len(close_series) < 2:
+                logger.warning(f"Insufficient data for {key} ({ticker}): {len(close_series)} rows")
                 continue
 
             current_price = float(close_series.iloc[-1])
@@ -187,10 +187,10 @@ def fetch_macro_indicators(lookback_days=5):
                 "change_%": round(change_pct, 2),
                 "ticker":   ticker,
             }
-            logger.info(f"{key}: {current_price:.4f} ({change_pct:+.2f}%)")
+            logger.info(f"{key} ({ticker}): {current_price:.4f} ({change_pct:+.2f}%)")
 
         except Exception as e:
-            logger.error(f"Failed to fetch {key}: {e}")
+            logger.error(f"Failed to fetch {key} ({ticker}): {e}")
 
     return macros
 
@@ -200,19 +200,19 @@ def generate_macro_signals(macros):
     """매크로 지표 → 신호 생성"""
     signals = {}
 
-    dxy_change = macros.get("DXY", {}).get("change_%", 0)
+    dxy_change    = macros.get("DXY",    {}).get("change_%", 0)
+    oil_change    = macros.get("OIL",    {}).get("change_%", 0)
+    copper_change = macros.get("COPPER", {}).get("change_%", 0)
+    vix_price     = macros.get("VIX",    {}).get("price",    0)
+    btc_change    = macros.get("BTC",    {}).get("change_%", 0)
+    lit_change    = macros.get("LIT",    {}).get("change_%", 0)
+
     if dxy_change > 1.0:
         signals["DXY_signal"] = "STRONG"
     elif dxy_change < -1.0:
         signals["DXY_signal"] = "WEAK"
     else:
         signals["DXY_signal"] = "NEUTRAL"
-
-    oil_change    = macros.get("OIL",    {}).get("change_%", 0)
-    copper_change = macros.get("COPPER", {}).get("change_%", 0)
-    vix_price     = macros.get("VIX",    {}).get("price",    0)
-    btc_change    = macros.get("BTC",    {}).get("change_%", 0)
-    lit_change    = macros.get("LIT",    {}).get("change_%", 0)
 
     signals["OIL_spike"]    = oil_change    > 3.0
     signals["COPPER_spike"] = copper_change > 3.0
@@ -226,7 +226,7 @@ def generate_macro_signals(macros):
 
 # ===== SECTOR BOOST CALCULATION =====
 def calc_sector_boost(signals):
-    """섹터별 매크로 부스트 계산"""
+    """섹터별 매크로 부스트 산출"""
     sector_boosts = {}
 
     for sector, sensitivity in SECTOR_MACRO_MAP.items():
@@ -252,17 +252,17 @@ def calc_sector_boost(signals):
     return sector_boosts
 
 
-# ===== [v1.2 신규] M_SCORE 합산 & REGIME 판정 =====
+# ===== [v1.2] M_SCORE 산출 & REGIME 판정 =====
 def calc_m_score_and_regime(sector_boosts: dict) -> tuple:
     """
-    전체 섹터 부스트 평균 → m_score → regime 판정
+    전체 섹터 부스트 합산 → m_score → regime 판정
     Returns: (m_score, regime, multiplier)
     """
     if not sector_boosts:
         return 0.0, "neutral", 1.0
 
-    m_score   = round(sum(sector_boosts.values()) / len(sector_boosts), 2)
-    regime    = classify_macro(m_score)
+    m_score    = round(sum(sector_boosts.values()) / len(sector_boosts), 2)
+    regime     = classify_macro(m_score)
     multiplier = REGIME_MULTIPLIER[regime]
 
     logger.info(f"[REGIME] m_score={m_score} → regime={regime} (multiplier={multiplier})")
@@ -276,7 +276,7 @@ def calc_m_score_and_regime(sector_boosts: dict) -> tuple:
 
 # ===== MAIN =====
 def run():
-    logger.info("=== SFD MACRO RADAR v1.2 START ===")
+    logger.info("=== SFD MACRO RADAR v1.3 START ===")
     logger.info(f"OUTPUTS_DIR: {OUTPUTS_DIR}")
 
     macros        = fetch_macro_indicators(lookback_days=5)
@@ -288,17 +288,17 @@ def run():
     rows = []
     for sector, boost in sector_boosts.items():
         rows.append({
-            "sector":      sector,
-            "macro_boost": boost,
-            "vix_alert":   signals.get("VIX_alert",    False),
-            "btc_rally":   signals.get("BTC_rally",    False),
-            "dxy_signal":  signals.get("DXY_signal",   "NEUTRAL"),
-            "oil_spike":   signals.get("OIL_spike",    False),
-            "copper_spike":signals.get("COPPER_spike", False),
-            "m_score":     m_score,       # [v1.2 신규]
-            "regime":      regime,        # [v1.2 신규]
-            "multiplier":  multiplier,    # [v1.2 신규]
-            "fetch_time":  datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "sector":       sector,
+            "macro_boost":  boost,
+            "vix_alert":    signals.get("VIX_alert",    False),
+            "btc_rally":    signals.get("BTC_rally",    False),
+            "dxy_signal":   signals.get("DXY_signal",   "NEUTRAL"),
+            "oil_spike":    signals.get("OIL_spike",    False),
+            "copper_spike": signals.get("COPPER_spike", False),
+            "m_score":      m_score,
+            "regime":       regime,
+            "multiplier":   multiplier,
+            "fetch_time":   datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         })
 
     df = pd.DataFrame(rows)
@@ -308,10 +308,10 @@ def run():
     # JSON 메타데이터
     meta = {
         "fetch_time":    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "m_score":       m_score,     # [v1.2 신규]
-        "regime":        regime,      # [v1.2 신규]
-        "multiplier":    multiplier,  # [v1.2 신규]
-        "regime_action": get_regime_action(regime),  # [v1.2 신규]
+        "m_score":       m_score,
+        "regime":        regime,
+        "multiplier":    multiplier,
+        "regime_action": get_regime_action(regime),
         "signals":       {k: (str(v) if isinstance(v, bool) else v) for k, v in signals.items()},
         "macros":        {k: v for k, v in macros.items()},
         "sector_boosts": sector_boosts,
@@ -320,13 +320,13 @@ def run():
         json.dump(meta, f, ensure_ascii=False, indent=2)
     logger.info(f"[OK] {OUTPUT_JSON}")
 
-    logger.info("=== SFD MACRO RADAR v1.2 DONE ===")
+    logger.info("=== SFD MACRO RADAR v1.3 DONE ===")
     return meta
 
 
 if __name__ == "__main__":
     result = run()
-    print(f"\n[결과 요약]")
+    print(f"\n[최종 결과]")
     print(f"  m_score  : {result['m_score']}")
     print(f"  regime   : {result['regime'].upper()}")
     print(f"  multiplier: ×{result['multiplier']}")
