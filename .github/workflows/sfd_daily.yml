@@ -70,6 +70,7 @@ jobs:
       # -- Layer 1: prev_close_fetch --
       - name: Layer 1 -- prev_close_fetch
         run: python tools/sfd_prev_close_fetch.py
+        continue-on-error: true
 
       - name: Make signal_input from prev_close
         run: |
