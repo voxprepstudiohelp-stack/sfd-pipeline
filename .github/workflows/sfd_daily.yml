@@ -181,3 +181,18 @@ jobs:
       - name: Upload latest to Drive
         run: python utils/gdrive_uploader.py
         continue-on-error: true
+
+      - name: Export Dashboard JSON
+        env:
+          KIS_APP_KEY: ${{ secrets.KIS_APP_KEY }}
+          KIS_APP_SECRET: ${{ secrets.KIS_APP_SECRET }}
+        run: python scripts/export_dashboard_json.py
+        continue-on-error: true
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dashboard
+          publish_branch: gh-pages
+          keep_files: true

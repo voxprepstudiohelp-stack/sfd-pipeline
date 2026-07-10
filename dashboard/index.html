@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SFD Intelligence Dashboard</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg:#f5f4f0;--surface:#ffffff;--surface-2:#f9f8f5;
+  --border:rgba(0,0,0,0.09);--border-md:rgba(0,0,0,0.15);
+  --text-1:#0b0b0b;--text-2:#52514e;--text-3:#898781;--radius:8px;
+  --c-ok:#1baf7a;--bg-ok:#eaf3de;--c-warn:#ba7517;--bg-warn:#faeeda;
+  --c-alert:#a32d2d;--bg-alert:#fcebeb;--c-focus:#2a78d6;--bg-focus:#e6f1fb;
+  --c-neutral:#52514e;--bg-stale:#f1efe8;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:#111110;--surface:#1a1a19;--surface-2:#222221;
+    --border:rgba(255,255,255,0.09);--border-md:rgba(255,255,255,0.15);
+    --text-1:#f0efeb;--text-2:#c3c2b7;--text-3:#898781;
+    --bg-ok:#173404;--bg-warn:#412402;--bg-alert:#501313;--bg-focus:#042c53;--bg-stale:#2c2c2a;
+  }
+}
+body { font-family:-apple-system,'Pretendard','Apple SD Gothic Neo',sans-serif;background:var(--bg);color:var(--text-1);font-size:14px;line-height:1.5;min-height:100vh; }
+.page { max-width:1100px;margin:0 auto;padding:1.25rem 1.5rem 3rem; }
+.header { display:flex;justify-content:space-between;align-items:flex-start;padding-bottom:1rem;border-bottom:0.5px solid var(--border-md);margin-bottom:1rem; }
+.header-left h1 { font-size:16px;font-weight:600;color:var(--text-1);letter-spacing:-0.01em; }
+.header-left p { font-size:12px;color:var(--text-3);margin-top:2px; }
+.header-right { text-align:right; }
+.run-badge { display:inline-flex;align-items:center;gap:4px;font-size:11px;padding:3px 9px;border-radius:20px;background:var(--bg-ok);color:var(--c-ok);font-weight:500; }
+.run-badge.stale { background:var(--bg-stale);color:var(--text-3); }
+.timestamp { font-size:11px;color:var(--text-3);margin-top:4px;display:block; }
+.core-msg { display:flex;align-items:flex-start;gap:10px;background:var(--bg-focus);border-left:3px solid var(--c-focus);border-radius:0 var(--radius) var(--radius) 0;padding:0.7rem 1rem;margin-bottom:0.75rem;font-size:13px;color:var(--text-1); }
+.core-msg.alert-state { background:var(--bg-alert);border-color:var(--c-alert); }
+.action-bar { display:flex;align-items:center;gap:10px;background:var(--bg-warn);border:0.5px solid var(--c-warn);border-radius:var(--radius);padding:0.6rem 0.875rem;margin-bottom:1.25rem;font-size:12px;color:var(--text-1); }
+.kpi-row { display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:1.25rem; }
+.kpi-card { background:var(--surface);border:0.5px solid var(--border);border-radius:var(--radius);padding:0.75rem 0.875rem; }
+.kpi-val { font-size:20px;font-weight:600;color:var(--text-1);display:block;line-height:1.2;letter-spacing:-0.02em; }
+.kpi-label { font-size:11px;color:var(--text-3);margin-top:3px;display:block; }
+.kpi-unit { font-size:10px; }
+.main-grid { display:grid;grid-template-columns:1fr 380px;gap:12px;margin-bottom:12px; }
+.card { background:var(--surface);border:0.5px solid var(--border);border-radius:12px;padding:1rem 1.25rem; }
+.card+.card { margin-top:12px; }
+.card-label { font-size:11px;font-weight:600;color:var(--text-3);letter-spacing:0.05em;text-transform:uppercase;margin-bottom:0.75rem;display:flex;align-items:center;gap:5px; }
+.top10-row { display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:0.5px solid var(--border);border-radius:4px; }
+.top10-row:last-child { border-bottom:none; }
+.top10-row:hover { background:var(--surface-2); }
+.rank { width:22px;font-size:12px;font-weight:600;color:var(--text-3);text-align:center;flex-shrink:0; }
+.rank.r1{color:#ba7517}.rank.r2{color:#898781}.rank.r3{color:#eb6834}
+.stock-name { font-size:13px;font-weight:500;color:var(--text-1); }
+.stock-meta { font-size:11px;color:var(--text-3); }
+.score-wrap { display:flex;align-items:center;gap:6px;flex-shrink:0; }
+.score-track { width:60px;height:4px;background:var(--surface-2);border-radius:2px;overflow:hidden; }
+.score-fill { height:100%;border-radius:2px;background:var(--c-focus); }
+.score-num { font-size:12px;color:var(--text-2);min-width:26px;text-align:right; }
+.sig-pill { font-size:10px;font-weight:500;padding:2px 7px;border-radius:20px;flex-shrink:0; }
+.sig-strong{background:var(--bg-ok);color:var(--c-ok)}.sig-buy{background:var(--bg-focus);color:var(--c-focus)}.sig-watch{background:var(--bg-warn);color:var(--c-warn)}
+.empty-state { padding:2rem 0;text-align:center;color:var(--text-3);font-size:12px; }
+.empty-icon { font-size:28px;margin-bottom:8px;opacity:0.35; }
+.port-row { display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:0.5px solid var(--border); }
+.port-row:last-child { border-bottom:none; }
+.port-name-wrap { flex:1;min-width:0; }
+.port-name { font-size:13px;font-weight:500;color:var(--text-1); }
+.port-detail { font-size:10px;color:var(--text-3);margin-top:1px; }
+.bullet-wrap { width:72px;flex-shrink:0; }
+.bullet-header { display:flex;justify-content:space-between;font-size:9px;color:var(--text-3);margin-bottom:3px; }
+.bullet-track { height:6px;background:var(--surface-2);border-radius:3px;position:relative;overflow:hidden; }
+.bullet-fill { height:100%;border-radius:3px;position:absolute;left:0;top:0; }
+.pnl-val { font-size:13px;font-weight:500;min-width:46px;text-align:right;flex-shrink:0; }
+.status-pill { font-size:10px;font-weight:500;padding:3px 8px;border-radius:20px;min-width:46px;text-align:center;flex-shrink:0; }
+.s-ok{background:var(--bg-ok);color:var(--c-ok)}.s-near{background:var(--bg-warn);color:var(--c-warn)}.s-alert{background:var(--bg-alert);color:var(--c-alert)}
+.up{color:var(--c-ok)}.dn{color:var(--c-alert)}
+.acc-grid { display:grid;grid-template-columns:1fr 1fr 1fr;gap:1px;background:var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:8px; }
+.acc-cell { background:var(--surface);padding:0.875rem 0.5rem;text-align:center; }
+.acc-val { font-size:22px;font-weight:600;letter-spacing:-0.02em; }
+.acc-sub { font-size:11px;color:var(--text-3);margin-top:2px; }
+.acc-bar-wrap { height:3px;background:var(--surface-2);border-radius:2px;margin-top:6px;overflow:hidden; }
+.acc-bar { height:100%;border-radius:2px; }
+.acc-note { font-size:10px;color:var(--text-3);text-align:right; }
+.freshness-bar { display:flex;justify-content:space-between;align-items:center;border-top:0.5px solid var(--border);padding-top:0.75rem;margin-top:0.75rem;font-size:11px;color:var(--text-3); }
+#stale-banner { display:none;align-items:center;gap:8px;background:var(--bg-stale);border:0.5px solid var(--border-md);border-radius:var(--radius);padding:0.5rem 0.875rem;margin-bottom:1rem;font-size:12px;color:var(--text-2); }
+@media (max-width:768px) { .main-grid{grid-template-columns:1fr} .kpi-row{grid-template-columns:repeat(3,1fr)} }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="header">
+    <div class="header-left">
+      <h1>SFD Intelligence Dashboard</h1>
+      <p>오늘 취해야 할 액션 — 매일 09:30 KST 자동 갱신</p>
+    </div>
+    <div class="header-right">
+      <span id="run-badge" class="run-badge">Run #— 로딩 중</span>
+      <span id="ts-label" class="timestamp">—</span>
+    </div>
+  </div>
+  <div id="stale-banner">⚠ 데이터가 24시간 이상 갱신되지 않았습니다 — 파이프라인 상태를 확인하세요</div>
+  <div id="core-msg" class="core-msg"><span>📡</span><span id="core-msg-text">데이터 로딩 중...</span></div>
+  <div id="action-bar" class="action-bar"><span style="font-size:15px;flex-shrink:0">▶</span><span id="action-text">파이프라인 연결 후 액션 아이템이 표시됩니다</span></div>
+  <div class="kpi-row">
+    <div class="kpi-card"><span id="v-kospi" class="kpi-val">—</span><span class="kpi-label">KOSPI <span class="kpi-unit">pt</span></span></div>
+    <div class="kpi-card"><span id="v-usdkrw" class="kpi-val">—</span><span class="kpi-label">USD/KRW <span class="kpi-unit">원</span></span></div>
+    <div class="kpi-card"><span id="v-usrate" class="kpi-val">—</span><span class="kpi-label">미국 기준금리 <span class="kpi-unit">%</span></span></div>
+    <div class="kpi-card"><span id="v-vix" class="kpi-val">—</span><span class="kpi-label">VIX <span class="kpi-unit">공포지수</span></span></div>
+    <div class="kpi-card"><span id="v-accuracy" class="kpi-val">—</span><span class="kpi-label">D+1 정확도 <span class="kpi-unit">% (누적)</span></span></div>
+  </div>
+  <div class="main-grid">
+    <div class="card">
+      <div class="card-label">🔥 급등예상 TOP 10<span style="margin-left:auto;font-size:10px;font-weight:400;color:var(--text-3);text-transform:none">sfd_master_signal_latest.csv · SFD score 기준</span></div>
+      <div id="top10-list"><div class="empty-state"><div class="empty-icon">📂</div><div>파이프라인 실행 후 자동 채워집니다</div><div style="margin-top:4px">sfd_master_signal_latest.csv 연결 대기 중</div></div></div>
+    </div>
+    <div>
+      <div class="card">
+        <div class="card-label">🕸 거미줄 트리거 상태<span style="margin-left:auto;font-size:10px;font-weight:400;color:var(--text-3);text-transform:none">평단가 기준 (KRW)</span></div>
+        <div id="port-list"></div>
+        <div style="font-size:10px;color:var(--text-3);margin-top:8px">바: 트리거까지 남은 거리 / 손익률 = (현재가 - 평단가) ÷ 평단가 × 100</div>
+      </div>
+      <div class="card">
+        <div class="card-label">🎯 예측 정확도<span style="margin-left:auto;font-size:10px;font-weight:400;color:var(--text-3);text-transform:none">분모: 누적 예측 건수</span></div>
+        <div class="acc-grid">
+          <div class="acc-cell"><div id="acc-d1" class="acc-val" style="color:var(--c-focus)">—</div><div class="acc-sub">D+1</div><div class="acc-bar-wrap"><div id="bar-d1" class="acc-bar" style="background:var(--c-focus);width:0%"></div></div></div>
+          <div class="acc-cell"><div id="acc-d3" class="acc-val" style="color:var(--c-ok)">—</div><div class="acc-sub">D+3</div><div class="acc-bar-wrap"><div id="bar-d3" class="acc-bar" style="background:var(--c-ok);width:0%"></div></div></div>
+          <div class="acc-cell"><div id="acc-d5" class="acc-val" style="color:var(--c-warn)">—</div><div class="acc-sub">D+5</div><div class="acc-bar-wrap"><div id="bar-d5" class="acc-bar" style="background:var(--c-warn);width:0%"></div></div></div>
+        </div>
+        <p id="acc-note" class="acc-note">데이터 로딩 중</p>
+      </div>
+    </div>
+  </div>
+  <div class="freshness-bar">
+    <span id="data-source">소스: sfd_dashboard_data.json</span>
+    <span id="data-fresh">마지막 갱신: —</span>
+  </div>
+</div>
+<script>
+const DATA_URL='./data/sfd_dashboard_data.json';
+async function loadData(){try{const r=await fetch(DATA_URL+'?t='+Date.now());if(!r.ok)throw new Error();return await r.json();}catch(e){return null;}}
+function isStale(t){if(!t)return true;return Date.now()-new Date(t).getTime()>86400000;}
+function fmt(v,d=0){if(v==null)return'—';return Number(v).toLocaleString('ko-KR',{minimumFractionDigits:d,maximumFractionDigits:d});}
+function fmtPct(v){if(v==null)return'—';const n=Number(v);return(n>=0?'+':'')+n.toFixed(1)+'%';}
+const PORT=[
+  {name:'대한전선',ticker:'009830',trigger:26075,avg:46575,qty:2},
+  {name:'LS',ticker:'006260',trigger:260225,avg:496938,qty:4},
+  {name:'두산에너빌리티',ticker:'034020',trigger:56000,avg:101960,qty:5},
+  {name:'한전기술',ticker:'052690',trigger:68600,avg:142467,qty:3},
+];
+function buildCoreMsg(data,rows){
+  const al=rows.filter(r=>r.status==='alert'),nr=rows.filter(r=>r.status==='near'),top=data?.top10_signals?.[0];
+  if(al.length>0)return{text:`🔴 ${al.map(r=>r.name).join(', ')} 거미줄 트리거 발동 — 예약주문 즉시 확인 필요`,alert:true};
+  if(nr.length>0)return{text:`🟡 ${nr.map(r=>r.name).join(', ')} 트리거 근접 — 모니터링 강화`+(top?` · TOP: ${top.name||top.ticker}(${top.trigger_chain||''})`:``),alert:false};
+  return{text:`🟢 보유 4종목 거미줄 전원 미발동 — `+(top?`TOP 시그널 ${top.name||top.ticker}(${top.trigger_chain||''}) 주목`:`신규 시그널 확인`),alert:false};
+}
+function buildAction(rows){
+  const al=rows.filter(r=>r.status==='alert'),nr=rows.filter(r=>r.status==='near');
+  if(al.length>0)return`예약주문 확인: ${al.map(r=>`${r.name} ${r.trigger.toLocaleString()}원`).join(' / ')} — 키움 체결 여부 확인`;
+  if(nr.length>0)return`${nr.map(r=>r.name).join(', ')} 트리거(${nr.map(r=>r.trigger.toLocaleString()).join(', ')}원) 5% 근접 — 예약주문 등록 대기`;
+  return'현재 액션 불필요 — TOP10 확인 후 관심종목 예약주문 등록 여부 판단';
+}
+function renderPortfolio(data){
+  const prices={};
+  if(data?.portfolio)Object.values(data.portfolio).forEach(p=>{if(p.ticker)prices[p.ticker]=p.current_price;});
+  const rows=PORT.map(s=>{
+    const cur=prices[s.ticker]??null;
+    const pnlPct=cur?(cur-s.avg)/s.avg*100:null;
+    let status='ok',gapPct=null;
+    if(cur){if(cur<=s.trigger)status='alert';else if(cur<=s.trigger*1.05)status='near';gapPct=(cur-s.trigger)/s.trigger*100;}
+    const fillPct=cur?Math.min(100,Math.max(0,100-((cur-s.trigger)/s.trigger*100)*3)):0;
+    const fillColor=status==='alert'?'var(--c-alert)':status==='near'?'var(--c-warn)':'var(--c-focus)';
+    return{...s,cur,pnlPct,status,gapPct,fillPct,fillColor};
+  });
+  document.getElementById('port-list').innerHTML=rows.map(r=>{
+    const pc=r.status==='alert'?'s-alert':r.status==='near'?'s-near':'s-ok';
+    const pt=r.status==='alert'?'발동':r.status==='near'?'근접':'미발동';
+    const pnlC=r.pnlPct!=null&&r.pnlPct>=0?'up':'dn';
+    const gt=r.gapPct!=null?(r.gapPct>0?`+${r.gapPct.toFixed(1)}%`:r.gapPct.toFixed(1)+'%'):'—';
+    return`<div class="port-row"><div class="port-name-wrap"><div class="port-name">${r.name} <span style="font-size:10px;color:var(--text-3)">${r.ticker}</span></div><div class="port-detail">평단 ${r.avg.toLocaleString()}원 · 트리거 ${r.trigger.toLocaleString()}원 · ${r.qty}주</div></div><div class="bullet-wrap"><div class="bullet-header"><span>트리거</span><span>현재가</span></div><div class="bullet-track"><div class="bullet-fill" style="width:${r.fillPct}%;background:${r.fillColor}"></div></div><div style="font-size:9px;color:var(--text-3);margin-top:2px;text-align:right">괴리 ${gt}</div></div><span class="pnl-val ${pnlC}">${r.pnlPct!=null?fmtPct(r.pnlPct):'—'}</span><span class="status-pill ${pc}">${pt}</span></div>`;
+  }).join('');
+  return rows;
+}
+function renderTop10(signals){
+  const el=document.getElementById('top10-list');
+  if(!signals||signals.length===0){el.innerHTML=`<div class="empty-state"><div class="empty-icon">📂</div><div>파이프라인 실행 후 자동 채워집니다</div><div style="margin-top:4px">sfd_master_signal_latest.csv 연결 대기 중</div></div>`;return;}
+  el.innerHTML=signals.slice(0,10).map((s,i)=>{
+    const rank=i+1,rc=rank<=3?`r${rank}`:'',score=s.sfd_score??0,sig=(s.signal||'').toUpperCase();
+    const pc=sig.includes('STRONG')?'sig-strong':sig==='BUY'||sig==='RESERVE_BUY'?'sig-buy':'sig-watch';
+    const pt=sig.includes('STRONG')?'강매수':sig==='BUY'||sig==='RESERVE_BUY'?'매수':'관망';
+    const curPx=s.current_price?`${Number(s.current_price).toLocaleString()}원`:'현재가 연결 후';
+    return`<div class="top10-row"><span class="rank ${rc}">${rank}</span><div style="flex:1;min-width:0"><div class="stock-name">${s.name||s.ticker} <span style="font-size:10px;color:var(--text-3)">${s.ticker}</span></div><div class="stock-meta">${s.trigger_chain||s.sector||''} · ${curPx}</div></div><div class="score-wrap"><div class="score-track"><div class="score-fill" style="width:${Math.round(score)}%"></div></div><span class="score-num">${Math.round(score)}</span></div><span class="sig-pill ${pc}">${pt}</span></div>`;
+  }).join('');
+}
+function renderAccuracy(acc){
+  const d1=acc?.d1,d3=acc?.d3,d5=acc?.d5,total=acc?.total_predictions??0;
+  document.getElementById('acc-d1').textContent=d1!=null?Math.round(d1)+'%':'—';
+  document.getElementById('acc-d3').textContent=d3!=null?Math.round(d3)+'%':'—';
+  document.getElementById('acc-d5').textContent=d5!=null?Math.round(d5)+'%':'—';
+  document.getElementById('bar-d1').style.width=(d1??0)+'%';
+  document.getElementById('bar-d3').style.width=(d3??0)+'%';
+  document.getElementById('bar-d5').style.width=(d5??0)+'%';
+  document.getElementById('acc-note').textContent=total?`누적 ${total}건 기준 · 분모: 전체 BUY 시그널 건수`:'데이터 없음 — accuracy_tracker.json 연결 필요';
+  document.getElementById('v-accuracy').textContent=d1!=null?Math.round(d1)+'%':'—';
+}
+async function main(){
+  const data=await loadData();
+  if(!data||isStale(data?.meta?.generated_at))document.getElementById('stale-banner').style.display='flex';
+  const meta=data?.meta??{},rb=document.getElementById('run-badge');
+  rb.textContent=meta.run_id?`✓ Run #${meta.run_id} · ${meta.pipeline_version||''}`:'연결 대기 중';
+  if(!meta.run_id)rb.classList.add('stale');
+  document.getElementById('ts-label').textContent=meta.generated_at_kst||'—';
+  const m=data?.macro??{};
+  document.getElementById('v-kospi').textContent=fmt(m.kospi);
+  document.getElementById('v-usdkrw').textContent=fmt(m.usd_krw);
+  document.getElementById('v-usrate').textContent=m.us_rate!=null?Number(m.us_rate).toFixed(3)+'%':'—';
+  document.getElementById('v-vix').textContent=m.vix!=null?Number(m.vix).toFixed(1):'—';
+  const portRows=renderPortfolio(data);
+  renderTop10(data?.top10_signals);
+  renderAccuracy(data?.accuracy);
+  const msg=buildCoreMsg(data,portRows);
+  document.getElementById('core-msg-text').textContent=msg.text;
+  if(msg.alert)document.getElementById('core-msg').classList.add('alert-state');
+  document.getElementById('action-text').textContent=buildAction(portRows);
+  document.getElementById('data-source').textContent=`소스: KIS API + sfd_master_signal_latest.csv | 파이프라인: ${meta.pipeline_version||'—'}`;
+  document.getElementById('data-fresh').textContent=`마지막 갱신: ${meta.generated_at_kst||'연결 대기 중'} (Asia/Seoul)`;
+}
+main();
+setInterval(()=>location.reload(),600000);
+</script>
+</body>
+</html>

@@ -9,3 +9,5 @@ tools/fix_*.py
 .credentials/
 token_backup.json
 *.db
+
+.env
