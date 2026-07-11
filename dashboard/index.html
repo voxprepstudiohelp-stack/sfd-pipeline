@@ -127,6 +127,11 @@ body { font-family:-apple-system,'Pretendard','Apple SD Gothic Neo',sans-serif;b
       </div>
     </div>
   </div>
+  <div class="card" style="margin-bottom:12px">
+    <div class="card-label">🌏 글로벌·국내 정세 브리핑<span id="brief-model" style="margin-left:auto;font-size:10px;font-weight:400;color:var(--text-3);text-transform:none">Gemini 2.5 Pro · 매시 정각 갱신 (07~21시 KST)</span></div>
+    <div id="brief-summary" style="font-size:13px;color:var(--text-1);padding:0.5rem 0.75rem;background:var(--surface-2);border-radius:var(--radius);margin-bottom:10px;display:none"></div>
+    <div id="brief-list"><div class="empty-state"><div class="empty-icon">🌐</div><div>브리핑 생성 대기 중</div><div style="margin-top:4px">sfd_briefing.json 연결 후 자동 표시됩니다</div></div></div>
+  </div>
   <div class="freshness-bar">
     <span id="data-source">소스: sfd_dashboard_data.json</span>
     <span id="data-fresh">마지막 갱신: —</span>
@@ -199,6 +204,21 @@ function renderAccuracy(acc){
   document.getElementById('acc-note').textContent=total?`누적 ${total}건 기준 · 분모: 전체 BUY 시그널 건수`:'데이터 없음 — accuracy_tracker.json 연결 필요';
   document.getElementById('v-accuracy').textContent=d1!=null?Math.round(d1)+'%':'—';
 }
+const BRIEF_URL='./data/sfd_briefing.json';
+async function loadBriefing(){try{const r=await fetch(BRIEF_URL+'?t='+Date.now());if(!r.ok)throw new Error();return await r.json();}catch(e){return null;}}
+function renderBriefing(brief){
+  const listEl=document.getElementById('brief-list'),sumEl=document.getElementById('brief-summary'),modelEl=document.getElementById('brief-model');
+  if(!brief||brief.error||!brief.sections||brief.sections.length===0)return;
+  if(brief.one_line_summary){sumEl.textContent='💡 '+brief.one_line_summary;sumEl.style.display='block';}
+  if(brief.generated_at_kst)modelEl.textContent=`Gemini 2.5 Pro · ${brief.generated_at_kst} 생성`;
+  const im={positive:{txt:'호재',cls:'s-ok'},negative:{txt:'악재',cls:'s-alert'},neutral:{txt:'중립',cls:'s-near'}};
+  listEl.innerHTML=brief.sections.map(s=>{
+    const p=im[s.impact]||im.neutral;
+    return`<div style="padding:9px 0;border-bottom:0.5px solid var(--border)"><div style="display:flex;align-items:center;gap:8px;margin-bottom:3px"><span style="font-size:13px;font-weight:500;color:var(--text-1)">${s.title}</span><span class="status-pill ${p.cls}" style="min-width:36px">${p.txt}</span></div><div style="font-size:12px;color:var(--text-2);line-height:1.55">${s.content}</div>${s.impact_reason?`<div style="font-size:11px;color:var(--text-3);margin-top:3px">→ ${s.impact_reason}</div>`:''}</div>`;
+  }).join('');
+  const rows=listEl.children;
+  if(rows.length)rows[rows.length-1].style.borderBottom='none';
+}
 async function main(){
   const data=await loadData();
   if(!data||isStale(data?.meta?.generated_at))document.getElementById('stale-banner').style.display='flex';
@@ -214,11 +234,13 @@ async function main(){
   const portRows=renderPortfolio(data);
   renderTop10(data?.top10_signals);
   renderAccuracy(data?.accuracy);
+  const brief=await loadBriefing();
+  renderBriefing(brief);
   const msg=buildCoreMsg(data,portRows);
   document.getElementById('core-msg-text').textContent=msg.text;
   if(msg.alert)document.getElementById('core-msg').classList.add('alert-state');
   document.getElementById('action-text').textContent=buildAction(portRows);
-  document.getElementById('data-source').textContent=`소스: KIS API + sfd_master_signal_latest.csv | 파이프라인: ${meta.pipeline_version||'—'}`;
+  document.getElementById('data-source').textContent=`소스: KIS API + sfd_master_signal_latest.csv + Gemini briefing | 파이프라인: ${meta.pipeline_version||'—'}`;
   document.getElementById('data-fresh').textContent=`마지막 갱신: ${meta.generated_at_kst||'연결 대기 중'} (Asia/Seoul)`;
 }
 main();
