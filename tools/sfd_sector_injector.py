@@ -241,8 +241,8 @@ def main():
         raise SystemExit(1)
 
     if not os.path.exists(FUND_CSV):
-        print(f"[FATAL] FUND CSV not found: {FUND_CSV}")
-        raise SystemExit(1)
+        print(f"[WARN] FUND CSV not found: {FUND_CSV} -> skip fund merge (graceful exit)")
+        raise SystemExit(0)
 
     # Load sector scores (BM-9)
     sector_scores = fetch_sector_scores()

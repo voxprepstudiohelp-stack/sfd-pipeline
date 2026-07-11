@@ -40,7 +40,7 @@ def get_access_token():
     body = {"grant_type": "client_credentials",
             "appkey": APP_KEY, "appsecret": APP_SECRET}
     try:
-        r = requests.post(url, json=body, timeout=10)
+        r = requests.post(url, json=body, timeout=30)
         r.raise_for_status()
         token = r.json().get("access_token", "")
         print("[OK] KIS token issued OK (first 20 chars: " + token[:20] + "...)")
@@ -65,7 +65,7 @@ def fetch_investor(token, ticker):
     }
     params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": ticker}
     try:
-        r = requests.get(url, headers=headers, params=params, timeout=10)
+        r = requests.get(url, headers=headers, params=params, timeout=30)
         r.raise_for_status()
         out = r.json().get("output", [{}])
         if not out:
