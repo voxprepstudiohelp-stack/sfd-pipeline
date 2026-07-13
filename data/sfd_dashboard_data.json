@@ -1,0 +1,74 @@
+{
+  "meta": {
+    "generated_at": "2026-07-13T11:54:30.146460+09:00",
+    "generated_at_kst": "2026-07-13 11:54 KST",
+    "run_id": "125",
+    "pipeline_version": "yml_v10.6_agg_v4.1.2_waist_v1.0",
+    "data_date": "2026-07-13"
+  },
+  "macro": {
+    "kospi": null,
+    "kosdaq": null,
+    "usd_krw": null,
+    "us_rate": 3.625,
+    "kr_rate": 2.75,
+    "vix": null,
+    "sp500": null,
+    "nasdaq": null
+  },
+  "top10_signals": [],
+  "portfolio": {
+    "대한전선": {
+      "ticker": "001440",
+      "avg_price": 55900.0,
+      "qty": 1,
+      "trigger_price": 26075,
+      "current_price": null,
+      "pnl_pct": null,
+      "eval_amt": null,
+      "spider_status": "조회불가",
+      "phase": "A안 (회복·현금확보)"
+    },
+    "LS": {
+      "ticker": "006260",
+      "avg_price": 538667.0,
+      "qty": 3,
+      "trigger_price": 260225,
+      "current_price": null,
+      "pnl_pct": null,
+      "eval_amt": null,
+      "spider_status": "조회불가",
+      "phase": "A안 (회복·현금확보)"
+    },
+    "두산에너빌리티": {
+      "ticker": "034020",
+      "avg_price": 114300.0,
+      "qty": 3,
+      "trigger_price": 56000,
+      "current_price": null,
+      "pnl_pct": null,
+      "eval_amt": null,
+      "spider_status": "조회불가",
+      "phase": "A안 (회복·현금확보)"
+    },
+    "한전기술": {
+      "ticker": "052690",
+      "avg_price": 164700.0,
+      "qty": 2,
+      "trigger_price": 68600,
+      "current_price": null,
+      "pnl_pct": null,
+      "eval_amt": null,
+      "spider_status": "조회불가",
+      "phase": "A안 (회복·현금확보)"
+    }
+  },
+  "accuracy": {
+    "d1": null,
+    "d3": null,
+    "d5": null,
+    "total_predictions": 6,
+    "note": "accuracy_tracker.json 없음 — 수동 업데이트 필요"
+  },
+  "alerts": []
+}
