@@ -90,10 +90,6 @@ jobs:
         run: python tools/sfd_event_calendar_builder.py
         continue-on-error: true
 
-      - name: Update OHLCV Store
-        timeout-minutes: 45
-        run: python tools/sfd_ohlcv_store.py --update-universe
-
       - name: Regime Classification
         run: python tools/sfd_regime_classifier.py --batch
         timeout-minutes: 5
