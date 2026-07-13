@@ -5,7 +5,7 @@ name: SFD Daily Pipeline
 # [V10.5 -> V10.6] fix: signal_input cp source = outputs/latest/sfd_prev_close_latest.csv (ticker full columns). old inputs/sfd_prev_close_input.csv had only stock_code, causing L2.7 KeyError ticker
 #
 # [V10.2 -> V10.5 changes]
-# - Layer 5.2: sfd_add_buy_v2.py ?�붽? (議곗??留ㅼ�??좏샇)
+# - Layer 5.2: sfd_add_buy_v2.py ?곕떽? (鈺곌퀣??筌띲끉彛??醫륁깈)
 
 on:
   schedule:
@@ -90,9 +90,9 @@ jobs:
         run: python tools/sfd_event_calendar_builder.py
         continue-on-error: true
 
-      - name: Update OHLCV Store`n        timeout-minutes: 45
+      - name: Update OHLCV Store
+        timeout-minutes: 45
         run: python tools/sfd_ohlcv_store.py --update-universe
-        timeout-minutes: 25
 
       - name: Regime Classification
         run: python tools/sfd_regime_classifier.py --batch
