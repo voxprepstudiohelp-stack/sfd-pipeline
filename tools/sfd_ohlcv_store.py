@@ -1,274 +1,245 @@
-# -*- coding: utf-8 -*-
-# sfd_ohlcv_store.py | v1.0 | 2026.07.03
-#
-# [v1.0]
-# - P1 OHLCV Store: master_input tickers → 200 days daily OHLCV → outputs/latest/ohlcv.db (SQLite)
-# - Table: ohlcv_daily (ticker TEXT, date TEXT, open REAL, high REAL, low REAL,
-#                        close REAL, volume INTEGER, PRIMARY KEY(ticker, date))
-# - INSERT OR REPLACE on PK conflict
-# - Meta JSON: ohlcv_store_meta.json (updated_at, ticker_count, row_count, failed[])
-# - SFD_BASE_DIR env override for BASE_DIR resolution
-# - Per-ticker failures logged + collected in meta.failed; no sys.exit on skip
+# sfd_ohlcv_store.py V1.0 / 2026.07.13
+"""Persistent, incrementally updated OHLCV storage for the SFD pipeline."""
 
-import os
-import sys
-import csv
+from __future__ import annotations
+
 import json
-import sqlite3
 import logging
-import traceback
-from datetime import datetime, timedelta
+import os
+import time
+from datetime import date, timedelta
+from pathlib import Path
+from typing import Any
 
 import pandas as pd
-import FinanceDataReader as fdr
-
-# ── Path config ───────────────────────────────────────────────────────────────
-_env_base = os.environ.get("SFD_BASE_DIR", "")
-if _env_base and os.path.isdir(_env_base):
-    BASE_DIR = _env_base
-else:
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-INPUT_DIR = os.path.join(BASE_DIR, "inputs")
-LATEST_DIR = os.path.join(BASE_DIR, "outputs", "latest")
-os.makedirs(LATEST_DIR, exist_ok=True)
-
-INPUT_CSV       = os.path.join(INPUT_DIR, "sfd_master_signal_input.csv")
-DB_PATH         = os.path.join(LATEST_DIR, "ohlcv.db")
-META_PATH       = os.path.join(LATEST_DIR, "ohlcv_store_meta.json")
-LOG_PATH        = os.path.join(LATEST_DIR, "sfd_ohlcv_store.log")
-
-# ── Parameters ────────────────────────────────────────────────────────────────
-OHLCV_DAYS       = 200          # lookback window (calendar days) — covers ~200 trading bars
-MIN_BARS         = 40           # sanity floor for a "valid" fetch
-TABLE_NAME       = "ohlcv_daily"
-
-logging.basicConfig(
-    handlers=[
-        logging.FileHandler(LOG_PATH, encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-)
+import yfinance as yf
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-def load_tickers_from_master() -> list:
-    """Read ticker column from inputs/sfd_master_signal_input.csv."""
-    if not os.path.exists(INPUT_CSV):
-        logging.error(f"[STORE] INPUT not found: {INPUT_CSV}")
-        return []
+LOGGER = logging.getLogger(__name__)
+
+BASE_DIR = Path(
+    os.environ.get("SFD_BASE_DIR", Path(__file__).resolve().parent.parent)
+).resolve()
+OHLCV_DIR = BASE_DIR / "data" / "ohlcv"
+LAST_UPDATE_PATH = OHLCV_DIR / "last_update.json"
+CSV_COLUMNS = ["date", "open", "high", "low", "close", "volume", "code"]
+INITIAL_LOOKBACK_DAYS = 400
+REQUEST_INTERVAL_SECONDS = 0.5
+RETRY_DELAYS = (1, 2, 4)
+
+
+def _normalize_code(code: str) -> str:
+    normalized = str(code).strip().zfill(6)
+    if len(normalized) != 6 or not normalized.isdigit():
+        raise ValueError(f"Invalid stock code: {code!r}")
+    return normalized
+
+
+def _normalize_market(market: str) -> str:
+    normalized = str(market).strip().upper()
+    if normalized not in {"KS", "KQ"}:
+        raise ValueError(f"Invalid market: {market!r}; expected KS or KQ")
+    return normalized
+
+
+def _csv_path(code: str) -> Path:
+    return OHLCV_DIR / f"{code}.csv"
+
+
+def _read_last_updates() -> dict[str, str]:
+    if not LAST_UPDATE_PATH.exists():
+        return {}
     try:
-        with open(INPUT_CSV, encoding="utf-8-sig", newline="") as f:
-            reader = csv.DictReader(f)
-            first_col = reader.fieldnames[0] if reader.fieldnames else None
-            if first_col is None:
-                return []
-            # accept 'ticker' OR fallback to first column name
-            col = "ticker" if "ticker" in reader.fieldnames else first_col
-            seen = set()
-            tickers = []
-            for row in reader:
-                raw = (row.get(col) or "").strip()
-                if not raw:
-                    continue
-                t = raw.zfill(6)
-                if t in seen:
-                    continue
-                seen.add(t)
-                tickers.append(t)
-        logging.info(f"[STORE] tickers loaded: {len(tickers)} (col={col})")
-        return tickers
-    except Exception as e:
-        logging.error(f"[STORE] INPUT read failed: {e}")
-        return []
+        with LAST_UPDATE_PATH.open("r", encoding="utf-8") as stream:
+            payload = json.load(stream)
+        if not isinstance(payload, dict):
+            raise ValueError("root value must be an object")
+        return {str(key): str(value) for key, value in payload.items()}
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        LOGGER.warning("Invalid last_update.json; starting with empty metadata: %s", exc)
+        return {}
 
 
-def init_db(conn: sqlite3.Connection) -> None:
-    """Create ohlcv_daily table if absent. Index for date scans."""
-    cur = conn.cursor()
-    cur.execute(
-        f"""
-        CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
-            ticker TEXT NOT NULL,
-            date   TEXT NOT NULL,
-            open   REAL,
-            high   REAL,
-            low    REAL,
-            close  REAL,
-            volume INTEGER,
-            PRIMARY KEY (ticker, date)
-        )
-        """
+def _write_last_updates(updates: dict[str, str]) -> None:
+    OHLCV_DIR.mkdir(parents=True, exist_ok=True)
+    temporary_path = LAST_UPDATE_PATH.with_suffix(".json.tmp")
+    with temporary_path.open("w", encoding="utf-8", newline="\n") as stream:
+        json.dump(updates, stream, ensure_ascii=False, indent=2, sort_keys=True)
+        stream.write("\n")
+    temporary_path.replace(LAST_UPDATE_PATH)
+
+
+def _read_csv(code: str) -> pd.DataFrame:
+    path = _csv_path(code)
+    frame = pd.read_csv(path, dtype={"code": str})
+    missing = set(CSV_COLUMNS).difference(frame.columns)
+    if missing:
+        raise ValueError(f"Invalid OHLCV CSV {path}: missing {sorted(missing)}")
+    frame = frame[CSV_COLUMNS].copy()
+    frame["code"] = frame["code"].astype(str).str.zfill(6)
+    frame["date"] = pd.to_datetime(frame["date"], errors="raise").dt.strftime(
+        "%Y-%m-%d"
     )
-    # Helpful secondary index when aggregating across tickers
-    cur.execute(
-        f"CREATE INDEX IF NOT EXISTS idx_{TABLE_NAME}_date ON {TABLE_NAME}(date)"
+    return frame.sort_values("date").reset_index(drop=True)
+
+
+def _normalize_download(raw: pd.DataFrame, code: str) -> pd.DataFrame:
+    if raw is None or raw.empty:
+        return pd.DataFrame(columns=CSV_COLUMNS)
+
+    frame = raw.copy()
+    if isinstance(frame.columns, pd.MultiIndex):
+        frame.columns = frame.columns.get_level_values(0)
+    frame = frame.reset_index()
+    frame.columns = [str(column).strip().lower() for column in frame.columns]
+    if "date" not in frame.columns and "datetime" in frame.columns:
+        frame = frame.rename(columns={"datetime": "date"})
+
+    required = {"date", "open", "high", "low", "close", "volume"}
+    missing = required.difference(frame.columns)
+    if missing:
+        raise ValueError(f"yfinance response missing columns: {sorted(missing)}")
+
+    frame = frame[["date", "open", "high", "low", "close", "volume"]].copy()
+    frame["date"] = pd.to_datetime(frame["date"], errors="raise").dt.strftime(
+        "%Y-%m-%d"
     )
-    conn.commit()
+    for column in ["open", "high", "low", "close", "volume"]:
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    frame = frame.dropna(subset=["date", "open", "high", "low", "close"])
+    frame["code"] = code
+    return frame[CSV_COLUMNS].sort_values("date").reset_index(drop=True)
 
 
-def fetch_one(conn: sqlite3.Connection, ticker: str) -> int:
-    """Fetch 200 days OHLCV for one ticker and write via INSERT OR REPLACE.
-    Returns number of rows written. Raises on fetch failure so caller logs to failed[].
-    """
-    end_dt = datetime.now()
-    start_dt = end_dt - timedelta(days=OHLCV_DAYS)
-    start_str = start_dt.strftime("%Y-%m-%d")
-    end_str = end_dt.strftime("%Y-%m-%d")
-
-    df = fdr.DataReader(ticker, start_str, end_str)
-    if df is None or len(df) == 0:
-        raise ValueError(f"empty OHLCV for {ticker}")
-
-    # Normalize index → 'date' string column. FDR returns DatetimeIndex named None/Date.
-    df = df.reset_index()
-    # find date column robustly
-    date_col = None
-    for c in df.columns:
-        if str(c).lower() in ("date", "index"):
-            date_col = c
-            break
-    if date_col is None:
-        # first unnamed column
-        date_col = df.columns[0]
-    df = df.rename(columns={date_col: "date"})
-    df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
-
-    # lower-case map + ticker fill
-    rename_map = {c: c.lower() for c in df.columns if c.lower() in ("open", "high", "low", "close", "volume")}
-    df = df.rename(columns=rename_map)
-
-    needed = ["date", "open", "high", "low", "close", "volume"]
-    for col in needed:
-        if col not in df.columns:
-            if col == "volume":
-                df[col] = 0
-            else:
-                raise ValueError(f"missing column {col} for {ticker}")
-
-    df["ticker"] = ticker
-    # Order: ticker, date, ohlcv
-    df = df[["ticker", "date", "open", "high", "low", "close", "volume"]]
-
-    rows = [
-        (
-            str(r["ticker"]),
-            str(r["date"]),
-            None if pd.isna(r["open"])  else float(r["open"]),
-            None if pd.isna(r["high"])  else float(r["high"]),
-            None if pd.isna(r["low"])   else float(r["low"]),
-            None if pd.isna(r["close"]) else float(r["close"]),
-            None if pd.isna(r["volume"]) else int(r["volume"]),
-        )
-        for _, r in df.iterrows()
-    ]
-
-    cur = conn.cursor()
-    cur.executemany(
-        f"""
-        INSERT OR REPLACE INTO {TABLE_NAME}
-            (ticker, date, open, high, low, close, volume)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        rows,
-    )
-    conn.commit()
-    return len(rows)
-
-
-def run() -> dict:
-    started = datetime.now()
-    logging.info(f"=== sfd_ohlcv_store v1.0 START ===")
-    logging.info(f"BASE_DIR:   {BASE_DIR}")
-    logging.info(f"DB_PATH:    {DB_PATH}")
-    logging.info(f"META_PATH:  {META_PATH}")
-
-    tickers = load_tickers_from_master()
-    if not tickers:
-        logging.warning("[STORE] no tickers to process — exiting gracefully")
-        meta = {
-            "updated_at":   started.strftime("%Y-%m-%d %H:%M:%S"),
-            "ticker_count": 0,
-            "row_count":    0,
-            "failed":       [],
-            "note":         "no tickers from master input",
-        }
-        with open(META_PATH, "w", encoding="utf-8") as f:
-            json.dump(meta, f, ensure_ascii=False, indent=2)
-        return meta
-
-    conn = sqlite3.connect(DB_PATH)
+def _download(code: str, market: str, start_date: date, end_date: date) -> pd.DataFrame:
+    ticker = f"{code}.{market}"
     try:
-        init_db(conn)
-    except Exception as e:
-        logging.error(f"[STORE] DB init failed: {e}")
-        conn.close()
-        meta = {
-            "updated_at":   started.strftime("%Y-%m-%d %H:%M:%S"),
-            "ticker_count": 0,
-            "row_count":    0,
-            "failed":       tickers,
-            "note":         f"db init failed: {e}",
-        }
-        with open(META_PATH, "w", encoding="utf-8") as f:
-            json.dump(meta, f, ensure_ascii=False, indent=2)
-        return meta
+        raw = yf.download(
+            ticker,
+            start=start_date.isoformat(),
+            end=(end_date + timedelta(days=1)).isoformat(),
+            auto_adjust=False,
+            progress=False,
+            threads=False,
+        )
+        return _normalize_download(raw, code)
+    finally:
+        time.sleep(REQUEST_INTERVAL_SECONDS)
 
-    succeeded = 0
-    row_count = 0
-    failed = []
 
-    for i, ticker in enumerate(tickers, 1):
+def update_ohlcv(code: str, market: str = "KS") -> pd.DataFrame:
+    """Download only missing dates, persist them, and return full ticker history."""
+    code = _normalize_code(code)
+    market = _normalize_market(market)
+    OHLCV_DIR.mkdir(parents=True, exist_ok=True)
+
+    path = _csv_path(code)
+    existing = _read_csv(code) if path.exists() else pd.DataFrame(columns=CSV_COLUMNS)
+    updates = _read_last_updates()
+    today = date.today()
+
+    if path.exists() and updates.get(code) == today.isoformat():
+        LOGGER.info("ticker=%s SKIP already updated today", code)
+        return existing
+
+    if existing.empty:
+        start_date = today - timedelta(days=INITIAL_LOOKBACK_DAYS)
+    else:
+        csv_last_date = pd.to_datetime(existing["date"].iloc[-1]).date()
+        metadata_date = updates.get(code)
         try:
-            n = fetch_one(conn, ticker)
-            if n < MIN_BARS:
-                logging.warning(f"[STORE] {ticker}: rows={n} (<{MIN_BARS}) — recorded anyway")
-            row_count += n
-            succeeded += 1
-            logging.info(f"[STORE] [{i}/{len(tickers)}] {ticker}: {n} rows")
-        except Exception as e:
-            logging.warning(f"[STORE] [{i}/{len(tickers)}] {ticker}: SKIP — {type(e).__name__}: {e}")
-            failed.append(ticker)
-        # soft yield, very small, avoid hammering FDR
-        # (no sleep — fdr has its own internal throttle; keep fast path)
+            last_date = date.fromisoformat(metadata_date) if metadata_date else csv_last_date
+        except ValueError:
+            LOGGER.warning("ticker=%s invalid last_update=%r; using CSV date", code, metadata_date)
+            last_date = csv_last_date
+        # Never let stale metadata cause duplicate wide downloads.
+        start_date = max(last_date, csv_last_date) + timedelta(days=1)
 
-    conn.close()
+    if start_date <= today:
+        fresh = _download(code, market, start_date, today)
+    else:
+        fresh = pd.DataFrame(columns=CSV_COLUMNS)
 
-    meta = {
-        "updated_at":   started.strftime("%Y-%m-%d %H:%M:%S"),
-        "ticker_count": succeeded,
-        "row_count":    row_count,
-        "failed":       failed,
-    }
-    with open(META_PATH, "w", encoding="utf-8") as f:
-        json.dump(meta, f, ensure_ascii=False, indent=2)
+    combined = pd.concat([existing, fresh], ignore_index=True)
+    if not combined.empty:
+        combined["code"] = code
+        combined = (
+            combined.drop_duplicates(subset="date", keep="last")
+            .sort_values("date")
+            .reset_index(drop=True)
+        )
+        combined.to_csv(path, columns=CSV_COLUMNS, index=False, encoding="utf-8")
 
-    logging.info(
-        f"=== DONE | tickers={succeeded}/{len(tickers)} "
-        f"rows={row_count} failed={len(failed)} ==="
-    )
-    if failed:
-        logging.info(f"[STORE] failed tickers: {failed}")
-    return meta
+    updates[code] = today.isoformat()
+    _write_last_updates(updates)
+    LOGGER.info("ticker=%s updated rows=%d total=%d", code, len(fresh), len(combined))
+    return combined
+
+
+def load_ohlcv(code: str, n: int = 120) -> pd.DataFrame:
+    """Load the most recent n stored rows without making a network request."""
+    code = _normalize_code(code)
+    if n < 0:
+        raise ValueError("n must be non-negative")
+    path = _csv_path(code)
+    if not path.exists():
+        raise FileNotFoundError(path)
+    return _read_csv(code).tail(n).reset_index(drop=True)
+
+
+def update_universe(codes: list[dict[str, str]]) -> dict[str, list[str]]:
+    """Update all tickers independently, retrying failures without stopping the pipeline."""
+    result: dict[str, list[str]] = {"updated": [], "failed": [], "skipped": []}
+
+    for item in codes:
+        raw_code: Any = item.get("code") if isinstance(item, dict) else item
+        try:
+            code = _normalize_code(raw_code)
+            market = _normalize_market(item.get("market", "KS"))
+        except Exception as exc:
+            label = str(raw_code)
+            result["failed"].append(label)
+            LOGGER.warning("ticker=%s FAIL invalid input: %s", label, exc)
+            continue
+
+        if _csv_path(code).exists() and _read_last_updates().get(code) == date.today().isoformat():
+            result["skipped"].append(code)
+            LOGGER.info("ticker=%s SKIP already updated today", code)
+            continue
+
+        for attempt in range(len(RETRY_DELAYS) + 1):
+            try:
+                update_ohlcv(code, market)
+                result["updated"].append(code)
+                break
+            except Exception as exc:
+                if attempt < len(RETRY_DELAYS):
+                    delay = RETRY_DELAYS[attempt]
+                    LOGGER.warning(
+                        "ticker=%s attempt=%d FAIL %s; retry in %ds",
+                        code,
+                        attempt + 1,
+                        exc,
+                        delay,
+                    )
+                    time.sleep(delay)
+                else:
+                    result["failed"].append(code)
+                    LOGGER.warning("ticker=%s FAIL after retries: %s", code, exc)
+
+    return result
 
 
 if __name__ == "__main__":
-    try:
-        run()
-    except Exception as e:
-        # never sys.exit — write a fallback meta and let the caller continue
-        logging.error(f"[STORE] unhandled error: {e}\n{traceback.format_exc()}")
-        try:
-            meta = {
-                "updated_at":   datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "ticker_count": 0,
-                "row_count":    0,
-                "failed":       [],
-                "note":         f"unhandled: {e}",
-            }
-            with open(META_PATH, "w", encoding="utf-8") as f:
-                json.dump(meta, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    universe = [
+        {"code": "005930", "market": "KS"},
+        {"code": "001440", "market": "KS"},
+    ]
+    for stock in universe:
+        update_ohlcv(stock["code"], stock["market"])
+        print(f"{stock['code']} rows={len(load_ohlcv(stock['code'], n=120))}")
+    print("second_run=", update_universe(universe))
