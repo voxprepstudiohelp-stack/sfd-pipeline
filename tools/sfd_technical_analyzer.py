@@ -21,10 +21,10 @@
 # [v1.2] Pullback Zone Score
 
 import os, sys, time, logging
-from datetime import datetime, timedelta
+from datetime import datetime
 import pandas as pd
 import numpy as np
-import FinanceDataReader as fdr
+from sfd_ohlcv_store import load_ohlcv
 
 try:
     from scipy.signal import find_peaks
@@ -86,6 +86,7 @@ VAL_NEAR_PCT_BM20 = 2.0
 POC_NEAR_PCT_BM20 = 1.0
 
 START_TIME = time.time()
+MARKET_CAP_MAP = {}
 
 
 # ── [A] Volume Profile BM-20 (0~20pt) ★ v1.6 ────────────────────────────────
@@ -373,37 +374,36 @@ def calc_cap_trust_factor(market_cap: float) -> float:
     else: return 0.7
 
 def get_market_cap(ticker: str, trade_date: str) -> float:
-    try:
-        import yfinance as yf
-        for sfx in [".KS", ".KQ"]:
-            info = yf.Ticker(ticker + sfx).fast_info
-            if hasattr(info, "market_cap") and info.market_cap:
-                return round(info.market_cap * 1350 / 1e8, 0)
-    except Exception: pass
-    return 0.0
+    """Return market cap in KRW 100M units from prev_close_fetch output."""
+    return float(MARKET_CAP_MAP.get(ticker.zfill(6), 0.0) or 0.0)
 
 
 # ── OHLCV 수집 / 최근 거래일 ─────────────────────────────────────────────────
 def fetch_ohlcv(ticker: str, end_date: datetime):
     try:
-        s = (end_date - timedelta(days=LOOKBACK_DAYS * 2)).strftime("%Y-%m-%d")
-        e = end_date.strftime("%Y-%m-%d")
-        df = fdr.DataReader(ticker, s, e)
+        df = load_ohlcv(ticker, n=LOOKBACK_DAYS)
         if df is None or len(df) < 20: return None
-        return df.sort_index().tail(LOOKBACK_DAYS)
-    except: return None
+        df = df.rename(columns={
+            "date": "Date", "open": "Open", "high": "High",
+            "low": "Low", "close": "Close", "volume": "Volume",
+        })
+        df["Date"] = pd.to_datetime(df["Date"])
+        return df.set_index("Date").sort_index().tail(LOOKBACK_DAYS)
+    except FileNotFoundError:
+        logging.warning("OHLCV store missing ticker=%s; skip", ticker)
+        return None
+    except Exception as e:
+        logging.warning("OHLCV store load failed ticker=%s: %s; skip", ticker, e)
+        return None
 
 def find_recent_trade_date() -> datetime:
-    now = datetime.now()
-    for i in range(7):
-        d = now - timedelta(days=i)
-        if d.weekday() >= 5: continue
-        try:
-            ds = d.strftime("%Y-%m-%d")
-            df = fdr.DataReader("005930", ds, ds)
-            if df is not None and len(df) > 0: return d
-        except: pass
-    return now
+    try:
+        df = load_ohlcv("005930", n=1)
+        if not df.empty:
+            return pd.to_datetime(df["date"].iloc[-1]).to_pydatetime()
+    except Exception as e:
+        logging.warning("Stored trade-date lookup failed: %s", e)
+    return datetime.now()
 
 
 # ── 종목 분석 ─────────────────────────────────────────────────────────────────
@@ -475,6 +475,7 @@ def analyze_ticker(ticker: str, end_date: datetime):
 
 # ── MAIN ─────────────────────────────────────────────────────────────────────
 def main():
+    global MARKET_CAP_MAP
     logging.info("=== sfd_technical_analyzer v1.6 START ===")
     logging.info(f"BASE_DIR: {BASE_DIR}")
     logging.info(f"SCIPY:    {SCIPY_AVAILABLE}")
@@ -484,10 +485,17 @@ def main():
     if not os.path.exists(INPUT_CSV):
         logging.error(f"INPUT_CSV not found: {INPUT_CSV}"); sys.exit(1)
 
+    input_df = pd.read_csv(INPUT_CSV, encoding="utf-8-sig", dtype={"ticker": str})
     tickers = (
-        pd.read_csv(INPUT_CSV, encoding="utf-8-sig", dtype={"ticker": str})["ticker"]
+        input_df["ticker"]
         .dropna().astype(str).str.strip().str.zfill(6).unique().tolist()
     )
+    if "market_cap_억" in input_df.columns:
+        cap_values = pd.to_numeric(input_df["market_cap_억"], errors="coerce").fillna(0.0)
+        cap_tickers = input_df["ticker"].astype(str).str.strip().str.zfill(6)
+        MARKET_CAP_MAP = dict(zip(cap_tickers, cap_values))
+    else:
+        logging.warning("market_cap_억 missing from prev_close input; fallback factor applies")
     logging.info(f"tickers: {len(tickers)}")
 
     end_date = find_recent_trade_date()

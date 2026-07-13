@@ -1,4 +1,4 @@
-﻿name: SFD Daily Pipeline
+name: SFD Daily Pipeline
 # sfd-pipeline/.github/workflows/sfd_daily.yml
 # V10.6 | 2026-07-02 | Claude
 #
@@ -12,6 +12,9 @@ on:
     # KST 08:35 = UTC 23:35 (weekdays)
     - cron: '35 23 * * 0-4'
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   run-pipeline:
@@ -50,8 +53,9 @@ jobs:
 
       - name: Make dirs + copy data
         run: |
-          mkdir -p /tmp/sfd/outputs/latest /tmp/sfd/outputs/history /tmp/sfd/inputs /tmp/sfd/data
+          mkdir -p /tmp/sfd/outputs/latest /tmp/sfd/outputs/history /tmp/sfd/inputs /tmp/sfd/data/ohlcv
           cp data/sfd_company_master_v1.4_sector_filled.csv /tmp/sfd/data/ || true
+          cp -r data/ohlcv/. /tmp/sfd/data/ohlcv/ || true
           cp portfolio.json /tmp/sfd/data/ || true
           cp portfolio.json /tmp/sfd/outputs/latest/ || true
           cp portfolio.json /tmp/sfd/ || true
@@ -78,10 +82,6 @@ jobs:
           echo "[OK] sfd_master_signal_input.csv ready"
           ls -la /tmp/sfd/inputs/
 
-      - name: Layer 1 -- ohlcv_store (pre-fetch)
-        run: python tools/sfd_ohlcv_store.py
-        continue-on-error: true
-
       - name: Layer 1.5 -- news_fetcher
         run: python tools/sfd_news_fetcher.py
         continue-on-error: true
@@ -89,6 +89,14 @@ jobs:
       - name: Layer 1.6 -- event_calendar_builder
         run: python tools/sfd_event_calendar_builder.py
         continue-on-error: true
+
+      - name: Update OHLCV Store
+        run: python tools/sfd_ohlcv_store.py --update-universe
+        timeout-minutes: 25
+
+      - name: Regime Classification
+        run: python tools/sfd_regime_classifier.py --batch
+        timeout-minutes: 5
 
       - name: Layer 2.7 -- technical_analyzer
         run: python tools/sfd_technical_analyzer.py
@@ -186,7 +194,17 @@ jobs:
         env:
           KIS_APP_KEY: ${{ secrets.KIS_APP_KEY }}
           KIS_APP_SECRET: ${{ secrets.KIS_APP_SECRET }}
-        run: python scripts/export_dashboard_json.py
+        run: |
+          python scripts/export_dashboard_json.py
+          mkdir -p data/ohlcv
+          cp -r /tmp/sfd/data/ohlcv/. data/ohlcv/
+          cp /tmp/sfd/data/regime_snapshot.json data/regime_snapshot.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add dashboard/
+          git add data/regime_snapshot.json
+          git add data/ohlcv/
+          git diff --cached --quiet || (git commit -m "chore: persist dashboard and OHLCV data" && git push)
         continue-on-error: true
 
       - name: Deploy to GitHub Pages

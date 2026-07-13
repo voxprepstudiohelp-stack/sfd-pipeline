@@ -3,7 +3,12 @@
 
 from __future__ import annotations
 
+import argparse
+import json
 import logging
+import os
+from datetime import date
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -15,6 +20,11 @@ SLOPE_STRONG = 0.0015
 EMA_PERIOD = 120
 ADX_PERIOD = 14
 MIN_ROWS = 150
+BASE_DIR = Path(
+    os.environ.get("SFD_BASE_DIR", Path(__file__).resolve().parent.parent)
+).resolve()
+OHLCV_DIR = BASE_DIR / "data" / "ohlcv"
+SNAPSHOT_PATH = BASE_DIR / "data" / "regime_snapshot.json"
 
 
 def _unknown_result() -> dict[str, Any]:
@@ -177,9 +187,54 @@ def _download_sample() -> pd.DataFrame:
     return sample.reset_index().rename(columns=lambda column: str(column).lower())
 
 
+def classify_stored_ohlcv() -> dict[str, Any]:
+    """Classify every persisted ticker CSV and save a JSON snapshot."""
+    frames: dict[str, pd.DataFrame] = {}
+    if not OHLCV_DIR.exists():
+        LOGGER.warning("OHLCV directory not found: %s", OHLCV_DIR)
+    else:
+        for path in sorted(OHLCV_DIR.glob("*.csv")):
+            ticker = path.stem
+            try:
+                frames[ticker] = pd.read_csv(path, dtype={"code": str})
+            except Exception as exc:
+                LOGGER.warning("ticker=%s CSV load failed: %s", ticker, exc)
+
+    regimes = classify_regime_batch(frames)
+    for result in regimes.values():
+        for key, value in result.items():
+            if isinstance(value, (float, np.floating)) and not np.isfinite(value):
+                result[key] = None
+    snapshot: dict[str, Any] = {
+        "date": date.today().isoformat(),
+        "regimes": regimes,
+    }
+    SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with SNAPSHOT_PATH.open("w", encoding="utf-8", newline="\n") as stream:
+        json.dump(snapshot, stream, ensure_ascii=False, indent=2, allow_nan=False)
+        stream.write("\n")
+    LOGGER.info("Regime snapshot saved: path=%s tickers=%d", SNAPSHOT_PATH, len(regimes))
+    return snapshot
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--batch",
+        action="store_true",
+        help="classify all data/ohlcv CSV files and write regime_snapshot.json",
+    )
+    args = parser.parse_args()
+    if args.batch:
+        snapshot = classify_stored_ohlcv()
+        print(json.dumps(snapshot, ensure_ascii=False, allow_nan=False))
+    else:
+        print(classify_regime(_download_sample()))
+
+
 if __name__ == "__main__":
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    print(classify_regime(_download_sample()))
+    main()

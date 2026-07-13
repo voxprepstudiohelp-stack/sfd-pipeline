@@ -1,4 +1,4 @@
-﻿
+
 inputs/
 !inputs/sfd_master_signal_input.csv
 outputs/
@@ -11,3 +11,4 @@ token_backup.json
 *.db
 
 .env
+.tmp_sfd_integration/

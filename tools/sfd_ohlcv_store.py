@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import os
@@ -26,6 +27,7 @@ CSV_COLUMNS = ["date", "open", "high", "low", "close", "volume", "code"]
 INITIAL_LOOKBACK_DAYS = 400
 REQUEST_INTERVAL_SECONDS = 0.5
 RETRY_DELAYS = (1, 2, 4)
+UNIVERSE_PATH = BASE_DIR / "inputs" / "sfd_master_signal_input.csv"
 
 
 def _normalize_code(code: str) -> str:
@@ -230,11 +232,48 @@ def update_universe(codes: list[dict[str, str]]) -> dict[str, list[str]]:
     return result
 
 
-if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+def load_pipeline_universe(path: Path = UNIVERSE_PATH) -> list[dict[str, str]]:
+    """Load the same master-input universe consumed by technical_analyzer."""
+    if not path.exists():
+        raise FileNotFoundError(path)
+
+    frame = pd.read_csv(
+        path,
+        encoding="utf-8-sig",
+        dtype={"ticker": str, "stock_code": str, "code": str},
     )
+    code_column = next(
+        (column for column in ("ticker", "stock_code", "code") if column in frame.columns),
+        None,
+    )
+    if code_column is None:
+        raise ValueError(f"Universe has no ticker column: {path}")
+
+    market_map = {
+        "KS": "KS",
+        "KOSPI": "KS",
+        "KQ": "KQ",
+        "KOSDAQ": "KQ",
+    }
+    universe: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for _, row in frame.iterrows():
+        try:
+            code = _normalize_code(row[code_column])
+        except ValueError:
+            continue
+        if code in seen:
+            continue
+        raw_market = str(row.get("market", "KS")).strip().upper()
+        market = market_map.get(raw_market, "KS")
+        universe.append({"code": code, "market": market})
+        seen.add(code)
+
+    LOGGER.info("Loaded pipeline universe: path=%s tickers=%d", path, len(universe))
+    return universe
+
+
+def _run_sample() -> None:
     universe = [
         {"code": "005930", "market": "KS"},
         {"code": "001440", "market": "KS"},
@@ -243,3 +282,32 @@ if __name__ == "__main__":
         update_ohlcv(stock["code"], stock["market"])
         print(f"{stock['code']} rows={len(load_ohlcv(stock['code'], n=120))}")
     print("second_run=", update_universe(universe))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--update-universe",
+        action="store_true",
+        help="incrementally update the pipeline master-input universe",
+    )
+    args = parser.parse_args()
+
+    if args.update_universe:
+        try:
+            summary = update_universe(load_pipeline_universe())
+            print(json.dumps(summary, ensure_ascii=False))
+        except Exception as exc:
+            # A universe-loader failure must not terminate the surrounding pipeline.
+            LOGGER.warning("Universe update unavailable: %s", exc)
+            print(json.dumps({"updated": [], "failed": [], "skipped": []}))
+    else:
+        _run_sample()
+
+
+if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    main()

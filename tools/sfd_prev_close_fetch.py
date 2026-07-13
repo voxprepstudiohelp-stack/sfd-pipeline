@@ -208,18 +208,21 @@ for market, suffix in [("KOSPI", ".KS"), ("KOSDAQ", ".KQ")]:
         listing.columns = [c.strip() for c in listing.columns]
         code_col = next((c for c in ["Code", "Symbol", "종목코드"] if c in listing.columns), None)
         name_col = next((c for c in ["Name", "종목명"]             if c in listing.columns), None)
+        marcap_col = next((c for c in ["Marcap", "MarketCap"] if c in listing.columns), None)
         if code_col is None:
             continue
 
         tickers_raw = listing[code_col].astype(str).str.zfill(6).tolist()
         names       = listing[name_col].tolist() if name_col else [""] * len(tickers_raw)
+        marcaps     = listing[marcap_col].tolist() if marcap_col else [None] * len(tickers_raw)
         yf_tickers  = [f"{t}{suffix}" for t in tickers_raw]
 
         print(f"  [{market}] {len(yf_tickers)} tickers -> download {period}...")
         ohlcv_map = download_batches(yf_tickers, period)
 
         ok = 0
-        for ticker_raw, name, yf_t in zip(tickers_raw, names, yf_tickers):
+        for ticker_raw, name, marcap, yf_t in zip(tickers_raw, names, marcaps, yf_tickers):
+            market_cap_eok = round(float(marcap) / 1e8, 0) if pd.notna(marcap) else None
             d = ohlcv_map.get(yf_t)
             if d is None or d.get("close") is None:
                 records.append({
@@ -229,6 +232,7 @@ for market, suffix in [("KOSPI", ".KS"), ("KOSDAQ", ".KQ")]:
                     "prev_prev_close": None, "prev_change_pct": None,
                     "close": None, "volume": None, "vol_avg": None,
                     "ma20": None, "ma60": None,
+                    "market_cap_억": market_cap_eok,
                     "market": market, "data_status": "NO_DATA",
                 })
                 continue
@@ -273,6 +277,7 @@ for market, suffix in [("KOSPI", ".KS"), ("KOSDAQ", ".KQ")]:
                 "vol_avg":          vol_avg,
                 "ma20":             ma20,
                 "ma60":             ma60,
+                "market_cap_억":    market_cap_eok,
                 "market":           market,
                 "data_status":      "OK",
             })
@@ -301,7 +306,7 @@ cols = [
     "prev_volume", "prev_value",
     "prev_prev_close", "prev_change_pct",
     "close", "volume", "vol_avg",
-    "ma20", "ma60",
+    "ma20", "ma60", "market_cap_억",
     "market", "fetch_date", "fetched_at", "data_status",
 ]
 cols   = [c for c in cols if c in merged.columns]
