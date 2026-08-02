@@ -1,15 +1,15 @@
 $ErrorActionPreference = 'Stop'
 
 $taskName = 'SFD News Sentinel'
-$launcher = 'D:\AI_WorkSpace\I_SFC\09_Implementation\SFC_DataPipeline\tools\run_sfd_news_sentinel.ps1'
+$hiddenLauncher = 'D:\AI_WorkSpace\I_SFC\09_Implementation\SFC_DataPipeline\tools\run_sfd_news_sentinel_hidden.vbs'
 $workingDirectory = 'D:\AI_WorkSpace\I_SFC\09_Implementation\SFC_DataPipeline\tools'
-$powershell = 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
+$wscript = 'C:\Windows\System32\wscript.exe'
 
-if (-not (Test-Path -LiteralPath $launcher)) {
-    throw "예약 실행 래퍼를 찾을 수 없습니다: $launcher"
+if (-not (Test-Path -LiteralPath $hiddenLauncher)) {
+    throw "숨김 실행 래퍼를 찾을 수 없습니다: $hiddenLauncher"
 }
 
-$arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $launcher + '"'
+$arguments = '"' + $hiddenLauncher + '"'
 $userId = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 
 $service = New-Object -ComObject 'Schedule.Service'
@@ -17,7 +17,7 @@ $service.Connect()
 $folder = $service.GetFolder('\')
 $definition = $service.NewTask(0)
 
-$definition.RegistrationInfo.Description = 'SFD RSS news monitor: CRITICAL immediate alerts and one WATCH summary per day.'
+$definition.RegistrationInfo.Description = 'SFD RSS news monitor: hidden execution and one consolidated Kakao report card per run.'
 $definition.Principal.UserId = $userId
 $definition.Principal.LogonType = 3
 $definition.Principal.RunLevel = 0
@@ -35,7 +35,7 @@ $trigger.Repetition.Duration = 'P1D'
 $trigger.Repetition.StopAtDurationEnd = $false
 
 $action = $definition.Actions.Create(0)
-$action.Path = $powershell
+$action.Path = $wscript
 $action.Arguments = $arguments
 $action.WorkingDirectory = $workingDirectory
 

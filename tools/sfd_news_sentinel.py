@@ -58,8 +58,6 @@ KAKAO_API_URL = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
 KAKAO_TOKEN_URL = "https://kauth.kakao.com/oauth/token"
 KAKAO_TOKEN_INFO_URL = "https://kapi.kakao.com/v1/user/access_token_info"
 KAKAO_REFRESH_MARGIN_SECONDS = 3600
-KAKAO_TEXT_LIMIT = 970
-
 POSITIVE_IMPACT_KEYWORDS = (
     "급등", "폭등", "신고가", "실적", "어닝", "영업이익", "수주", "계약",
     "인수", "합병", "투자", "증설", "surges",
@@ -281,16 +279,21 @@ def ensure_kakao_token(logger: logging.Logger) -> str | None:
         return token
 
 
-def _kakao_send_request(token: str, text: str, web_url: str = ""):
+def _kakao_send_request(
+    token: str, message: str | dict[str, Any], web_url: str = ""
+):
     import urllib.error
     import urllib.parse
     import urllib.request
-    template = {
-        "object_type": "text",
-        "text": text[:1000],
-        "link": {"web_url": web_url, "mobile_web_url": web_url},
-        "button_title": "대표 기사 보기" if web_url else "SFD 뉴스",
-    }
+    if isinstance(message, dict):
+        template = message
+    else:
+        template = {
+            "object_type": "text",
+            "text": message[:1000],
+            "link": {"web_url": web_url, "mobile_web_url": web_url},
+            "button_title": "대표 기사 보기" if web_url else "SFD 뉴스",
+        }
     body = urllib.parse.urlencode(
         {"template_object": json.dumps(template, ensure_ascii=False)}
     ).encode("utf-8")
@@ -320,7 +323,9 @@ def _kakao_send_request(token: str, text: str, web_url: str = ""):
     return _Response()
 
 
-def send_kakao(text: str, logger: logging.Logger, web_url: str = "") -> bool:
+def send_kakao(
+    message: str | dict[str, Any], logger: logging.Logger, web_url: str = ""
+) -> bool:
     token = os.environ.get("NOTIFY_KAKAO_TOKEN", "")
     if not token:
         token = refresh_kakao_token(logger) or ""
@@ -328,7 +333,7 @@ def send_kakao(text: str, logger: logging.Logger, web_url: str = "") -> bool:
             logger.warning("카카오 토큰 없음 (환경변수 NOTIFY_KAKAO_TOKEN)")
             return False
     try:
-        response = _kakao_send_request(token, text, web_url)
+        response = _kakao_send_request(token, message, web_url)
         logger.info("카카오 응답 [%s]: %s", response.status_code, response.text[:300])
         if response.status_code == 401:
             logger.warning("카카오 401 — 토큰 자동 갱신 후 1회 재전송")
@@ -336,7 +341,7 @@ def send_kakao(text: str, logger: logging.Logger, web_url: str = "") -> bool:
             if not token:
                 logger.error("KAKAO_TOKEN_EXPIRED: 자동 갱신 실패")
                 return False
-            response = _kakao_send_request(token, text, web_url)
+            response = _kakao_send_request(token, message, web_url)
             logger.info(
                 "카카오 재전송 응답 [%s]: %s",
                 response.status_code,
@@ -467,6 +472,21 @@ def market_view(articles: list[dict[str, Any]]) -> str:
     return "직접적인 가격 영향 신호는 제한적. 산업 추세 확인 단계"
 
 
+def impact_signal_counts(articles: list[dict[str, Any]]) -> tuple[int, int]:
+    impact_text = " ".join(
+        str(keyword)
+        for article in articles
+        for keyword in article.get("impact_hits", [])
+    ).casefold()
+    positive = sum(
+        impact_text.count(keyword.casefold()) for keyword in POSITIVE_IMPACT_KEYWORDS
+    )
+    negative = sum(
+        impact_text.count(keyword.casefold()) for keyword in NEGATIVE_IMPACT_KEYWORDS
+    )
+    return positive, negative
+
+
 def short_title(title: str, limit: int = 88) -> str:
     title = clean_text(title)
     return title if len(title) <= limit else title[: limit - 1].rstrip() + "…"
@@ -474,7 +494,7 @@ def short_title(title: str, limit: int = 88) -> str:
 
 def format_analysis_card(
     articles: list[dict[str, Any]], now: datetime
-) -> tuple[str, str]:
+) -> dict[str, Any]:
     ordered = sorted(
         articles,
         key=lambda article: (
@@ -489,40 +509,38 @@ def format_analysis_card(
     watch_count = len(ordered) - critical_count
     triggers = keyword_counts(ordered, "trigger_hits")
     impacts = keyword_counts(ordered, "impact_hits")
-    sources = keyword_counts(
-        [{"source": [article.get("feed", "출처 미상")]} for article in ordered],
-        "source",
-    )
-
-    lines = [
-        f"[SFD NEWS 통합 분석] {now.astimezone().strftime('%m/%d %H:%M')}",
-        f"신규 {len(ordered)}건 | 중요 {critical_count} | 관찰 {watch_count}",
-        "",
-        "■ 핵심 이슈",
-        f"{compact_keywords(triggers)}",
-        "■ 영향 신호",
-        f"{compact_keywords(impacts)}",
-        "■ 종합 판단",
-        market_view(ordered),
-        "■ 주요 출처",
-        compact_keywords(sources, 3),
-        "■ 대표 기사",
-    ]
-    for index, article in enumerate(ordered[:3], 1):
-        marker = "!" if article.get("level") == "CRITICAL" else "·"
-        lines.append(f"{index}{marker} {short_title(str(article.get('title', '')))}")
-    if len(ordered) > 3:
-        lines.append(f"외 {len(ordered) - 3}건 종합")
-    lines.extend([
-        "",
-        "※ 동일 이슈의 반복 보도 여부와 원문을 확인 후 판단",
-    ])
-
-    text = "\n".join(lines)
-    if len(text) > KAKAO_TEXT_LIMIT:
-        text = text[: KAKAO_TEXT_LIMIT - 1].rstrip() + "…"
+    positive_count, negative_count = impact_signal_counts(ordered)
     link = clean_text(ordered[0].get("link", "")) if ordered else ""
-    return text, link
+    representative = short_title(str(ordered[0].get("title", "")), 46)
+    description = "\n".join([
+        f"핵심: {compact_keywords(triggers, 3)}",
+        f"영향: {compact_keywords(impacts, 3)}",
+        f"판단: {market_view(ordered)}",
+        f"대표: {representative}",
+    ])
+    return {
+        "object_type": "feed",
+        "content": {
+            "title": (
+                f"SFD NEWS 통합 분석 | 중요 {critical_count} · 관찰 {watch_count}"
+            ),
+            "description": description,
+            "link": {"web_url": link, "mobile_web_url": link},
+        },
+        "item_content": {
+            "profile_text": "SFD Intelligence",
+            "items": [
+                {"item": "전체", "item_op": str(len(ordered))},
+                {"item": "중요", "item_op": str(critical_count)},
+                {"item": "관찰", "item_op": str(watch_count)},
+                {"item": "긍정", "item_op": str(positive_count)},
+                {"item": "부정", "item_op": str(negative_count)},
+            ],
+            "sum": "전체",
+            "sum_op": str(len(ordered)),
+        },
+        "button_title": "대표 기사 보기",
+    }
 
 
 def main() -> int:
@@ -558,8 +576,8 @@ def main() -> int:
 
     if watch_pending:
         pending_articles = list(watch_pending.values())
-        text, link = format_analysis_card(pending_articles, now)
-        sent = send_kakao(text, logger, link)
+        template = format_analysis_card(pending_articles, now)
+        sent = send_kakao(template, logger)
         logger.info(
             "통합 분석 카드 처리: %d건 (%s)",
             len(pending_articles),
