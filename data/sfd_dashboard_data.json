@@ -1,10 +1,10 @@
 {
   "meta": {
-    "generated_at": "2026-09-14T12:30:45.832658+09:00",
-    "generated_at_kst": "2026-09-14 12:30 KST",
-    "run_id": "173",
+    "generated_at": "2026-09-24T12:33:35.386268+09:00",
+    "generated_at_kst": "2026-09-24 12:33 KST",
+    "run_id": "181",
     "pipeline_version": "yml_v10.6_agg_v4.1.2_waist_v1.0",
-    "data_date": "2026-09-14"
+    "data_date": "2026-09-24"
   },
   "macro": {
     "kospi": null,
